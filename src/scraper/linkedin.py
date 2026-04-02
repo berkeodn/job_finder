@@ -109,34 +109,36 @@ async def _fetch_job_description(client: httpx.AsyncClient, url: str) -> str:
     return ""
 
 
-async def scrape_search(query: SearchQuery, max_pages: int = 2) -> list[RawJob]:
-    """Scrape LinkedIn public job search results for a single query."""
-    all_jobs: list[RawJob] = []
+async def scrape_page(query: SearchQuery, page: int) -> list[RawJob] | None:
+    """Scrape a single page of LinkedIn search results.
+    Returns list of jobs, or None if no more results / error.
+    """
+    url = _build_search_url(query, start=page * 25)
+    logger.info("Fetching page %d: %s", page + 1, url)
+
+    delay = random.uniform(settings.scrape_delay_min, settings.scrape_delay_max)
+    await asyncio.sleep(delay)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        for page in range(max_pages):
-            url = _build_search_url(query, start=page * 25)
-            logger.info("Fetching %s", url)
+        try:
+            resp = await client.get(url, headers=HEADERS, follow_redirects=True)
+            resp.raise_for_status()
+        except httpx.HTTPError as e:
+            logger.error("Search request failed: %s", e)
+            return None
 
-            delay = random.uniform(settings.scrape_delay_min, settings.scrape_delay_max)
-            await asyncio.sleep(delay)
+        # LinkedIn 303-redirects back to page 0 when there are no more results
+        if page > 0 and "start=0" in str(resp.url):
+            logger.info("LinkedIn redirected to page 1 — no more results")
+            return None
 
-            try:
-                resp = await client.get(url, headers=HEADERS, follow_redirects=True)
-                resp.raise_for_status()
-            except httpx.HTTPError as e:
-                logger.error("Search request failed: %s", e)
-                break
+        jobs = _parse_job_cards(resp.text)
+        if not jobs:
+            logger.info("No results on page %d", page + 1)
+            return None
 
-            jobs = _parse_job_cards(resp.text)
-            if not jobs:
-                logger.info("No more results on page %d", page + 1)
-                break
-
-            all_jobs.extend(jobs)
-            logger.info("Found %d jobs on page %d", len(jobs), page + 1)
-
-    return all_jobs
+        logger.info("Found %d jobs on page %d", len(jobs), page + 1)
+        return jobs
 
 
 async def fetch_descriptions(jobs: list[RawJob]) -> dict[str, str]:
