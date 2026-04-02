@@ -1,0 +1,46 @@
+name: Job Finder Pipeline
+
+on:
+  schedule:
+    # Runs every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  find-jobs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB (if any)
+        uses: actions/download-artifact@v4
+        with:
+          name: jobs-db
+          path: .
+        continue-on-error: true
+
+      - name: Run pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m src.main
+
+      - name: Upload DB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-db
+          path: jobs.db
+          retention-days: 90
+          overwrite: true

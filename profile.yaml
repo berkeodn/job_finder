@@ -1,0 +1,58 @@
+# ── Your Profile ──────────────────────────────────────────────
+# Edit this file to match YOUR skills, preferences, and experience.
+# The AI scorer uses `summary` + `skills` to rate each job.
+# The pre-filter uses `must_have_any` and `deal_breakers` for fast rejection.
+
+summary: |
+  Mid-level backend developer with 3 years of experience.
+  Strong in Python, FastAPI, Django, PostgreSQL, Docker.
+  Interested in AI/ML-adjacent roles and remote work.
+
+skills:
+  - python
+  - fastapi
+  - django
+  - postgresql
+  - docker
+  - redis
+  - rest api
+  - git
+
+experience_years: 3
+
+preferred_roles:
+  - backend developer
+  - python developer
+  - software engineer
+  - full stack developer
+
+# ── Search Queries ────────────────────────────────────────────
+# Each entry becomes a separate LinkedIn search.
+# Supported fields: keywords, location, time_posted (r86400=24h, r604800=7d), remote (true/false)
+
+searches:
+  - keywords: "python backend developer"
+    location: "Turkey"
+    time_posted: "r86400"
+    remote: true
+  - keywords: "fastapi developer"
+    location: "Europe"
+    time_posted: "r86400"
+    remote: true
+
+# ── Pre-filter Rules ─────────────────────────────────────────
+# Jobs must contain at least ONE of `must_have_any` (case-insensitive).
+# Jobs containing ANY `deal_breakers` term are immediately rejected.
+
+must_have_any:
+  - python
+  - backend
+  - fastapi
+  - django
+
+deal_breakers:
+  - "10+ years"
+  - "principal"
+  - "staff engineer"
+  - "security clearance"
+  - unpaid
