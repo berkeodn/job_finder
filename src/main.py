@@ -30,17 +30,23 @@ async def run() -> None:
     stats = {"scraped": 0, "new": 0, "prefiltered": 0, "scored": 0, "notified": 0}
 
     try:
+        # ── Stage 0: Retry un-scored jobs from previous runs ─────
+        retry_jobs = (
+            session.query(Job)
+            .filter(Job.passed_prefilter == True, Job.match_score == None)  # noqa: E711, E712
+            .all()
+        )
+        if retry_jobs:
+            logger.info("Found %d un-scored jobs from previous runs", len(retry_jobs))
+
         # ── Stage 1: Scrape ──────────────────────────────────────
-        # TODO: remove test limit — only first query, max 5 jobs
-        TEST_LIMIT = 5
         all_raw_jobs = []
-        for search in profile.searches[:1]:
+        for search in profile.searches:
             logger.info("Searching: %s (%s)", search.keywords, search.location)
-            jobs = await scrape_search(search, max_pages=1)
+            jobs = await scrape_search(search)
             all_raw_jobs.extend(jobs)
-        all_raw_jobs = all_raw_jobs[:TEST_LIMIT]
         stats["scraped"] = len(all_raw_jobs)
-        logger.info("Total scraped: %d jobs (TEST_LIMIT=%d)", stats["scraped"], TEST_LIMIT)
+        logger.info("Total scraped: %d jobs", stats["scraped"])
 
         # ── Stage 2: Dedup & Store ───────────────────────────────
         new_jobs: list[Job] = []
@@ -64,7 +70,7 @@ async def run() -> None:
         stats["new"] = len(new_jobs)
         logger.info("New jobs after dedup: %d", stats["new"])
 
-        if not new_jobs:
+        if not new_jobs and not retry_jobs:
             logger.info("No new jobs found. Done.")
             send_alert(
                 "📭 No new jobs found this run.\n\n"
@@ -74,80 +80,78 @@ async def run() -> None:
             _log_summary(stats)
             return
 
-        # ── Stage 3a: Pre-filter on TITLE only (fast, no HTTP) ───
-        title_passed: list[Job] = []
-        for job in new_jobs:
-            if passes_prefilter(job.title, "", profile):
-                title_passed.append(job)
-            else:
-                logger.debug("Title rejected: %s @ %s", job.title, job.company)
+        if not new_jobs and retry_jobs:
+            logger.info("No new jobs, but %d un-scored jobs to retry", len(retry_jobs))
+            candidates = []
 
-        session.commit()
-        logger.info("Jobs passing title pre-filter: %d / %d", len(title_passed), len(new_jobs))
-
-        if not title_passed:
-            logger.info("No jobs passed title pre-filter. Done.")
-            send_alert(
-                "📭 No jobs passed pre-filter this run.\n\n"
-                f"Scraped: {stats['scraped']}\n"
-                f"New: {stats['new']}\n"
-                "None matched your must-have keywords in the title."
-            )
-            _log_summary(stats)
-            return
-
-        # ── Stage 3b: Fetch descriptions only for survivors ──────
-        from src.scraper.linkedin import RawJob
-
-        raw_for_desc = [
-            RawJob(
-                job_id=j.job_id,
-                title=j.title,
-                company=j.company,
-                location=j.location,
-                url=j.url,
-                posted_time=j.posted_time,
-            )
-            for j in title_passed
-        ]
-        logger.info("Fetching descriptions for %d jobs...", len(raw_for_desc))
-        descriptions = await fetch_descriptions(raw_for_desc)
-
-        for job in title_passed:
-            job.description = descriptions.get(job.job_id, "")
-
-        session.commit()
-
-        # ── Stage 3c: Pre-filter on TITLE + DESCRIPTION ──────────
+        # ── Stage 3: Pre-filter new jobs ─────────────────────────
         candidates: list[Job] = []
-        for job in title_passed:
-            if passes_prefilter(job.title, job.description, profile):
-                job.passed_prefilter = True
-                candidates.append(job)
-            else:
-                logger.debug("Description rejected: %s @ %s", job.title, job.company)
+        if new_jobs:
+            # 3a: Pre-filter on TITLE only (fast, no HTTP)
+            title_passed: list[Job] = []
+            for job in new_jobs:
+                if passes_prefilter(job.title, "", profile):
+                    title_passed.append(job)
+                else:
+                    logger.debug("Title rejected: %s @ %s", job.title, job.company)
 
-        session.commit()
+            logger.info("Jobs passing title pre-filter: %d / %d", len(title_passed), len(new_jobs))
+
+            if title_passed:
+                # 3b: Fetch descriptions only for title survivors
+                from src.scraper.linkedin import RawJob
+
+                raw_for_desc = [
+                    RawJob(
+                        job_id=j.job_id,
+                        title=j.title,
+                        company=j.company,
+                        location=j.location,
+                        url=j.url,
+                        posted_time=j.posted_time,
+                    )
+                    for j in title_passed
+                ]
+                logger.info("Fetching descriptions for %d jobs...", len(raw_for_desc))
+                descriptions = await fetch_descriptions(raw_for_desc)
+
+                for job in title_passed:
+                    job.description = descriptions.get(job.job_id, "")
+
+                session.commit()
+
+                # 3c: Pre-filter on TITLE + DESCRIPTION
+                for job in title_passed:
+                    if passes_prefilter(job.title, job.description, profile):
+                        job.passed_prefilter = True
+                        candidates.append(job)
+                    else:
+                        logger.debug("Description rejected: %s @ %s", job.title, job.company)
+
+                session.commit()
+
         stats["prefiltered"] = len(candidates)
         logger.info("Jobs passing full pre-filter: %d", stats["prefiltered"])
 
-        if not candidates:
-            logger.info("No jobs passed full pre-filter. Done.")
+        if not candidates and not retry_jobs:
+            logger.info("No jobs to score. Done.")
             send_alert(
-                "📭 No jobs passed pre-filter this run.\n\n"
+                "📭 No matching jobs this run.\n\n"
                 f"Scraped: {stats['scraped']}\n"
                 f"New: {stats['new']}\n"
-                f"Passed title filter: {len(title_passed)}\n"
-                "None survived after checking descriptions."
+                f"Passed pre-filter: 0"
             )
             _log_summary(stats)
             return
 
         # ── Stage 4: AI Scoring ──────────────────────────────────
+        all_to_score = retry_jobs + candidates
         if not settings.gemini_api_key:
             logger.warning("GEMINI_API_KEY not set — skipping AI scoring")
         else:
-            for job in candidates:
+            for i, job in enumerate(all_to_score):
+                if job.match_score is not None:
+                    continue
                 logger.info("Scoring: %s @ %s", job.title, job.company)
                 try:
                     result = score_job(
@@ -165,11 +169,18 @@ async def run() -> None:
                 job.missing_skills = json.dumps(result["missing_skills"])
                 stats["scored"] += 1
 
+                # Stay under 10 RPM limit
+                if i < len(all_to_score) - 1:
+                    await asyncio.sleep(7)
+
             session.commit()
             logger.info("Scored %d jobs", stats["scored"])
 
         # ── Stage 5: Notify ──────────────────────────────────────
-        for job in candidates:
+        all_to_notify = retry_jobs + candidates
+        for job in all_to_notify:
+            if job.notified:
+                continue
             if job.match_score is None:
                 continue
             if job.match_score < settings.score_threshold:
