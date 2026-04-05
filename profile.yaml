@@ -62,9 +62,25 @@ searches:
   - keywords: "veri mühendisi"
     location: "Turkey"
     time_posted: "r86400"
+  - keywords: "data scientist"
+    location: "Turkey"
+    time_posted: "r86400"
+  - keywords: "data analyst"
+    location: "Turkey"
+    time_posted: "r86400"
+  - keywords: "business intelligence"
+    location: "Turkey"
+    time_posted: "r86400"
+  - keywords: "analytics engineer"
+    location: "Turkey"
+    time_posted: "r86400"
   - keywords: "data"
     location: "Turkey"
     time_posted: "r86400"
+  - keywords: "ai engineer"
+    location: "Turkey"
+    time_posted: "r86400"
+
 
 # ── Pre-filter Rules ─────────────────────────────────────────
 # Jobs must contain at least ONE of `must_have_any` (case-insensitive).
@@ -84,6 +100,10 @@ must_have_any:
   - data analytics
   - etl
   - data pipeline
+  - data
+  - veri analisti
+  - veri
+  - veri bilimci
 
 deal_breakers:
   - new grad
