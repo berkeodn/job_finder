@@ -38,7 +38,10 @@ skills:
   - dbt
   - git
   - langfuse
+  - langgraph
+  - langchain
   - openai api
+  - postman
 
 experience_years: 4
 
