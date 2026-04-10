@@ -87,6 +87,7 @@ def send_job_notification(
     missing_skills: list[str],
     posted_time: str = "",
     work_type: str = "",
+    job_id: str = "",
 ) -> bool:
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         logger.warning("Telegram credentials not configured, skipping notification")
@@ -98,7 +99,10 @@ def send_job_notification(
     )
     api_url = TELEGRAM_API.format(token=settings.telegram_bot_token)
 
-    inline_keyboard = [[{"text": "🔗 View Job", "url": url}]]
+    inline_keyboard = [
+        [{"text": "🔗 View Job", "url": url}],
+        [{"text": "📨 Başvur", "callback_data": f"apply:{job_id}"}],
+    ]
 
     try:
         resp = httpx.post(
