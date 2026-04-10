@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +22,7 @@ def load_jobs() -> pd.DataFrame:
         df = pd.read_sql(query, conn)
     if df.empty:
         return df
-    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True).dt.tz_localize(None)
     df["match_score"] = pd.to_numeric(df["match_score"], errors="coerce")
     return df
 
@@ -66,7 +66,7 @@ def main():
         selected_work_type = st.multiselect("Work type", work_types)
 
         days_back = st.selectbox("Time window", [7, 14, 30, 90, 365], index=0)
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+        cutoff = datetime.now() - timedelta(days=days_back)
 
     # ── Apply Filters ─────────────────────────────────────────
     filtered = scored.copy()
