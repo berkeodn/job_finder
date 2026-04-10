@@ -10,6 +10,16 @@ from src.notifier.telegram import send_alert
 
 logger = logging.getLogger(__name__)
 
+_client: genai.Client | None = None
+
+
+def _get_client() -> genai.Client:
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=settings.gemini_api_key)
+    return _client
+
+
 SCORE_PROMPT = """\
 You are a job-matching assistant. Compare the candidate profile with the job posting \
 and return a JSON object with exactly these keys:
@@ -29,9 +39,9 @@ Company: {company}
 Location: {location}
 Description:
 {description}
-
-Respond ONLY with valid JSON, no markdown fences, no extra text.
 """
+
+_FALLBACK_SCORE = {"score": 0, "reasons": ["Failed to parse AI response"], "missing_skills": []}
 
 
 def _build_profile_text(profile: Profile) -> str:
@@ -45,6 +55,22 @@ def _build_profile_text(profile: Profile) -> str:
     )
 
 
+def _parse_response(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]
+    if text.endswith("```"):
+        text = text.rsplit("```", 1)[0]
+    text = text.strip()
+
+    result = json.loads(text)
+    return {
+        "score": int(result.get("score", 0)),
+        "reasons": result.get("reasons", []),
+        "missing_skills": result.get("missing_skills", []),
+    }
+
+
 def score_job(
     profile: Profile,
     title: str,
@@ -52,8 +78,8 @@ def score_job(
     location: str,
     description: str,
 ) -> dict:
-    """Score a single job against the profile using Gemini. Returns parsed JSON."""
-    client = genai.Client(api_key=settings.gemini_api_key)
+    """Score a single job against the profile. Returns parsed JSON."""
+    client = _get_client()
 
     prompt = SCORE_PROMPT.format(
         profile=_build_profile_text(profile),
@@ -67,30 +93,17 @@ def score_job(
         response = client.models.generate_content(
             model=settings.gemini_model,
             contents=prompt,
+            config={"response_mime_type": "application/json"},
         )
-        text = response.text.strip()
-
-        # Strip markdown fences if the model wraps its response
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-        text = text.strip()
-
-        result = json.loads(text)
-        return {
-            "score": int(result.get("score", 0)),
-            "reasons": result.get("reasons", []),
-            "missing_skills": result.get("missing_skills", []),
-        }
+        return _parse_response(response.text)
     except (json.JSONDecodeError, KeyError) as e:
-        logger.error("Failed to parse Gemini response: %s", e)
-        return {"score": 0, "reasons": ["Failed to parse AI response"], "missing_skills": []}
+        logger.error("Failed to parse AI response: %s", e)
+        return {**_FALLBACK_SCORE}
     except ClientError as e:
-        logger.error("Gemini API client error: %s", e)
+        logger.error("AI API client error: %s", e)
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
             send_alert(
-                "⚠️ Gemini API rate limit hit!\n\n"
+                "⚠️ AI API rate limit hit!\n\n"
                 f"Error: {e}\n\n"
                 "Scoring is paused for this run. "
                 "Remaining jobs will be scored in the next run."
@@ -98,6 +111,6 @@ def score_job(
             raise
         return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": []}
     except Exception as e:
-        logger.error("Gemini API error: %s", e)
-        send_alert(f"⚠️ Gemini API unexpected error:\n\n{e}")
+        logger.error("AI API error: %s", e)
+        send_alert(f"⚠️ AI API unexpected error:\n\n{e}")
         return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": []}

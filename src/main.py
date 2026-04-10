@@ -9,7 +9,7 @@ from config import settings
 from src.db.database import get_session, init_db
 from src.db.models import Job
 from src.matcher.gemini import score_job
-from src.matcher.profile import load_profile, passes_prefilter
+from src.matcher.profile import is_blacklisted, load_profile, passes_prefilter
 from src.notifier.telegram import send_alert, send_job_notification
 from src.scraper.linkedin import fetch_descriptions, scrape_page
 
@@ -88,8 +88,12 @@ async def run() -> None:
                     logger.info("No new jobs on page %d, trying next page", page + 1)
                     continue
 
-                # Title pre-filter
-                title_passed = [j for j in new_jobs if passes_prefilter(j.title, "", profile)]
+                # Blacklist + title pre-filter
+                title_passed = [
+                    j for j in new_jobs
+                    if not is_blacklisted(j.company, profile)
+                    and passes_prefilter(j.title, "", profile)
+                ]
                 logger.info(
                     "Page %d: %d new, %d passed title filter",
                     page + 1, len(new_jobs), len(title_passed),
@@ -133,9 +137,7 @@ async def run() -> None:
 
         # ── Stage 3.5: Content-based dedup (same title+company within N days) ──
         from datetime import datetime, timedelta, timezone
-        dedup_cutoff_str = (
-            datetime.now(timezone.utc) - timedelta(days=settings.dedup_days)
-        ).strftime("%Y-%m-%d")
+        dedup_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.dedup_days)
 
         def _is_duplicate(job: Job) -> bool:
             """Check if we notified a same title+company job within the dedup window."""
@@ -146,7 +148,7 @@ async def run() -> None:
                 .filter(
                     Job.id != job.id,
                     Job.notified == True,  # noqa: E712
-                    Job.posted_time >= dedup_cutoff_str,
+                    Job.created_at >= dedup_cutoff,
                     Job.title.ilike(normalised_title),
                     Job.company.ilike(normalised_company),
                 )
@@ -186,6 +188,8 @@ async def run() -> None:
 
         # ── Stage 4: AI Scoring ──────────────────────────────────
         all_to_score = deduped_retries + deduped_candidates
+        total_to_score = sum(1 for j in all_to_score if j.match_score is None)
+
         if not settings.gemini_api_key:
             logger.warning("GEMINI_API_KEY not set — skipping AI scoring")
         else:
@@ -194,22 +198,22 @@ async def run() -> None:
             scored_count = 0
 
             logger.info(
-                "Rate limits: %d RPM, %d RPD, max %d per run (delay %.0fs)",
-                settings.gemini_rpm, settings.gemini_rpd, max_calls, rpm_delay,
+                "Scoring %d jobs (rate: %d RPM, delay %.0fs, cap %d/run)",
+                total_to_score, settings.gemini_rpm, rpm_delay, max_calls,
             )
 
             for job in all_to_score:
                 if job.match_score is not None:
                     continue
                 if scored_count >= max_calls:
-                    remaining = sum(1 for j in all_to_score if j.match_score is None) - scored_count
+                    remaining = total_to_score - scored_count
                     logger.warning(
                         "Per-run limit reached (%d/%d). %d jobs deferred to next run.",
                         scored_count, max_calls, remaining,
                     )
                     break
 
-                logger.info("Scoring [%d/%d]: %s @ %s", scored_count + 1, max_calls, job.title, job.company)
+                logger.info("Scoring [%d/%d]: %s @ %s", scored_count + 1, total_to_score, job.title, job.company)
                 try:
                     result = score_job(
                         profile=profile,
@@ -220,17 +224,18 @@ async def run() -> None:
                     )
                 except ClientError:
                     logger.warning("Rate limit hit — stopping scoring, will resume next run")
+                    session.commit()
                     break
                 job.match_score = result["score"]
                 job.match_reasons = json.dumps(result["reasons"])
                 job.missing_skills = json.dumps(result["missing_skills"])
+                session.commit()
                 scored_count += 1
                 stats["scored"] += 1
 
                 if scored_count < max_calls:
                     await asyncio.sleep(rpm_delay)
 
-            session.commit()
             logger.info("Scored %d jobs", stats["scored"])
 
         # ── Stage 5: Notify ──────────────────────────────────────

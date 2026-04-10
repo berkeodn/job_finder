@@ -1,3 +1,4 @@
+import json
 import logging
 
 import httpx
@@ -48,8 +49,7 @@ def _format_message(
         f"🏢 {esc_company}\n"
         f"{meta_line}\n\n"
         f"*Why it matches:*\n{reasons_text}\n\n"
-        f"*Missing skills:* {missing_text}\n\n"
-        f"[View Job]({_escape_md(url)})"
+        f"*Missing skills:* {missing_text}"
     )
 
 
@@ -98,6 +98,8 @@ def send_job_notification(
     )
     api_url = TELEGRAM_API.format(token=settings.telegram_bot_token)
 
+    inline_keyboard = [[{"text": "🔗 View Job", "url": url}]]
+
     try:
         resp = httpx.post(
             api_url,
@@ -105,7 +107,8 @@ def send_job_notification(
                 "chat_id": settings.telegram_chat_id,
                 "text": message,
                 "parse_mode": "MarkdownV2",
-                "disable_web_page_preview": False,
+                "disable_web_page_preview": True,
+                "reply_markup": json.dumps({"inline_keyboard": inline_keyboard}),
             },
             timeout=15,
         )

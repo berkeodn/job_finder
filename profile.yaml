@@ -44,6 +44,9 @@ skills:
   - postman
 
 experience_years: 4
+# Jobs requiring more than this many years are auto-rejected by pre-filter.
+# Regex catches patterns like "7+ years", "10 yıl" etc.
+max_experience_years: 7
 
 preferred_roles:
   - data engineer
@@ -111,8 +114,6 @@ must_have_any:
 deal_breakers:
   - new grad
   - yeni mezun
-  - "10+ years"
-  - "8+ years"
   - principal
   - staff engineer
   - security clearance
@@ -120,3 +121,8 @@ deal_breakers:
   - director
   - vp of
   - head of
+
+# ── Company Blacklist ─────────────────────────────────────────
+# Jobs from these companies are silently skipped (substring match).
+company_blacklist:
+  - turing
