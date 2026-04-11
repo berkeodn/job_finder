@@ -30,8 +30,30 @@ class AgentAdapter(BaseAdapter):
                 api_key=settings.gemini_api_key,
             )
 
+            is_linkedin = "linkedin.com" in url.lower()
+
+            login_instructions = ""
+            if is_linkedin and settings.linkedin_email and settings.linkedin_password:
+                login_instructions = (
+                    f"IMPORTANT — LinkedIn requires login before applying.\n"
+                    f"1. First go to https://www.linkedin.com/login\n"
+                    f"2. Enter email: {settings.linkedin_email}\n"
+                    f"3. Enter password: {settings.linkedin_password}\n"
+                    f"4. Click 'Sign in' and wait for the page to load.\n"
+                    f"5. If you see a CAPTCHA on the login page, STOP and report 'CAPTCHA_BLOCKED'.\n"
+                    f"6. After successful login, navigate to {url}\n"
+                    f"7. Click 'Easy Apply' if available, fill any required fields, and submit.\n"
+                    f"   If there is no Easy Apply button, look for an external 'Apply' link and follow it.\n\n"
+                )
+
+            apply_instructions = (
+                f"{'Go to ' + url + ' and f' if not is_linkedin else 'F'}ill the job application form "
+                f"with the following information:\n"
+            )
+
             task_prompt = (
-                f"Go to {url} and fill the job application form with the following information:\n"
+                f"{login_instructions}"
+                f"{apply_instructions}"
                 f"- Full Name: {profile.full_name}\n"
                 f"- First Name: {profile.first_name}\n"
                 f"- Last Name: {profile.last_name}\n"
@@ -64,8 +86,9 @@ class AgentAdapter(BaseAdapter):
                 f"{profile.summary}\n"
                 f"\nSkills: {', '.join(profile.skills[:15])}\n"
                 f"\nAfter filling all fields, submit the form. "
-                f"If you encounter a CAPTCHA, STOP immediately and report 'CAPTCHA_BLOCKED'. "
+                f"If you encounter a CAPTCHA at any point, STOP immediately and report 'CAPTCHA_BLOCKED'. "
                 f"Do NOT attempt to solve captchas. "
+                f"Do NOT keep retrying the same action if it triggers a login popup — report failure instead. "
                 f"If there are required fields you cannot fill, skip them and note them."
             )
 
