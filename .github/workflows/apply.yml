@@ -8,22 +8,20 @@ on:
 jobs:
   auto-apply:
     runs-on: self-hosted
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install Playwright browsers
-        run: playwright install chromium
+      - name: Setup venv and install dependencies
+        run: |
+          if (-not (Test-Path "venv")) { python -m venv venv }
+          venv\Scripts\Activate.ps1
+          pip install -q -r requirements.txt
+          playwright install chromium
 
       - name: Download latest DB from scrape workflow
         uses: dawidd6/action-download-artifact@v6
@@ -36,6 +34,7 @@ jobs:
 
       - name: Verify DB exists
         run: |
+          venv\Scripts\Activate.ps1
           python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); print(f'Jobs in DB: {s.query(Job).count()}'); s.close()"
 
       - name: Run auto-apply
@@ -49,7 +48,9 @@ jobs:
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
           IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
           HEADLESS: "true"
-        run: python -m src.applicant.runner
+        run: |
+          venv\Scripts\Activate.ps1
+          python -m src.applicant.runner
 
       - name: Upload DB artifact
         if: always() && hashFiles('jobs.db') != ''
