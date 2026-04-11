@@ -91,6 +91,16 @@ async def _apply_to_job(
             adapter_used=result.adapter_used,
         )
 
+    if not result.success and "job_closed" in result.message.lower():
+        job.apply_status = "closed"
+        session.commit()
+        logger.info("Job closed/expired: %s @ %s", job.title, job.company)
+        return ApplyResult(
+            success=False,
+            message="job_closed",
+            adapter_used=result.adapter_used,
+        )
+
     # Update DB
     if result.success:
         job.apply_status = "applied"
@@ -190,6 +200,12 @@ async def run_applicant() -> None:
                     answer_callback(cb_id, "Captcha — apply manually")
                 continue
 
+            if job.apply_status == "closed":
+                logger.info("Job closed, skipping: %s", job.title)
+                if cb_id:
+                    answer_callback(cb_id, "Job no longer available")
+                continue
+
             if cb_id:
                 answer_callback(cb_id, "Applying now...")
 
@@ -198,7 +214,16 @@ async def run_applicant() -> None:
 
             job_url = job.url or ""
 
-            if result.success:
+            if result.message == "job_closed":
+                logger.info("Job closed: %s @ %s — skipping", job.title, job.company)
+                send_alert(
+                    f"\U0001f6ab Job closed\n\n"
+                    f"{job.title} @ {job.company}\n"
+                    f"This job is no longer accepting applications.",
+                    buttons=[[{"text": "\U0001f517 View Job", "url": job_url}]] if job_url else None,
+                )
+                continue
+            elif result.success:
                 logger.info("Applied: %s @ %s via %s", job.title, job.company, result.adapter_used)
                 send_alert(
                     f"\u2705 Applied successfully!\n\n"

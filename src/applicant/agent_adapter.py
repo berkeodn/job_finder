@@ -72,8 +72,21 @@ class AgentAdapter(BaseAdapter):
                 f"with the following information:\n"
             )
 
+            closed_job_instructions = (
+                f"\nJOB CLOSED / EXPIRED DETECTION (CRITICAL):\n"
+                f"After navigating to the job page, if you see ANY of these:\n"
+                f"- 'No longer accepting applications'\n"
+                f"- 'This job is no longer available'\n"
+                f"- 'This position has been filled'\n"
+                f"- 'Bu ilan artık aktif değil'\n"
+                f"- 'Başvuru kabul edilmiyor'\n"
+                f"Then IMMEDIATELY use the done action with message: 'JOB_CLOSED: This job is no longer accepting applications.'\n"
+                f"Do NOT search for apply buttons, do NOT scroll, do NOT extract links. Just report done.\n"
+            )
+
             task_prompt = (
                 f"{login_instructions}"
+                f"{closed_job_instructions}"
                 f"{apply_instructions}"
                 f"- Full Name: {profile.full_name}\n"
                 f"- First Name: {profile.first_name}\n"
@@ -595,6 +608,13 @@ class AgentAdapter(BaseAdapter):
                 return ApplyResult(
                     success=False,
                     message="captcha detected by agent",
+                    adapter_used=self.name,
+                )
+
+            if "job_closed" in result_text:
+                return ApplyResult(
+                    success=False,
+                    message="job_closed",
                     adapter_used=self.name,
                 )
 
