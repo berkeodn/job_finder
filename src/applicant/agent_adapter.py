@@ -122,12 +122,18 @@ class AgentAdapter(BaseAdapter):
                 f"CUSTOM FORM INTERACTION TOOLS:\n"
                 f"- For radio buttons/checkboxes that don't respond to normal clicks (common on Workday): "
                 f"use force_click_element(text=\"Hayır\") or force_click_element(text=\"No\"). "
-                f"This sets aria-checked and dispatches proper events. Only pass text OR selector, not both.\n"
+                f"IMPORTANT: only pass text= for this tool. Do NOT pass selector='div' — "
+                f"that matches the page wrapper and clicks the wrong element.\n"
                 f"- For hidden inputs or React-controlled fields: "
                 f"use set_form_value(selector=\"input[name='field']\", value=\"myvalue\").\n"
                 f"- NEVER repeat the same failing action more than 2 times. "
                 f"Escalate: normal click → force_click_element → set_form_value → skip.\n"
                 f"- If ALL methods fail for a field after 3 total attempts, SKIP it and move on.\n\n"
+                f"IMPORTANT: Before retrying a radio button or checkbox, check if it ALREADY looks "
+                f"selected in the screenshot (filled circle, checkmark, highlighted). "
+                f"If the option appears selected but a validation error persists, the error "
+                f"may be about a DIFFERENT field. Read all error messages carefully and move on "
+                f"to the next unsolved field instead of retrying the same one.\n\n"
                 f"AUTOCOMPLETE / TYPEAHEAD FIELDS:\n"
                 f"Some fields (city, country, address) are autocomplete inputs that require selecting "
                 f"from a suggestion dropdown. If you type a value and the form still shows an error:\n"
@@ -160,44 +166,49 @@ class AgentAdapter(BaseAdapter):
                 )
 
             @tools.action(description=(
-                "Force-click an element using JavaScript when normal click doesn't work. "
-                "Useful for Workday and other custom UI frameworks. "
-                "Provide EITHER a CSS selector OR the visible text of the element. "
-                "Handles aria-checked radio buttons, hidden inputs, and React components."
+                "Force-click an element using a real browser click (CDP) when normal click "
+                "doesn't work. Useful for Workday and React frameworks that ignore JS events. "
+                "Provide the visible text of the element to click. "
+                "This generates trusted browser events that React will process."
             ))
             async def force_click_element(
                 browser_session,
-                selector: str = "",
                 text: str = "",
+                selector: str = "",
             ) -> ActionResult:
                 page = await browser_session.get_current_page()
                 if not page:
                     return ActionResult(extracted_content="No active page found")
-                js = """(args) => {
+
+                find_js = """(args) => {
                     let el;
-                    if (args.selector) el = document.querySelector(args.selector);
-                    if (!el && args.text) {
-                        const t = args.text.trim();
-                        const all = [...document.querySelectorAll('*')];
-                        el = all.find(e =>
+                    const t = (args.text || '').trim();
+                    const sel = (args.selector || '').trim();
+
+                    if (t) {
+                        const scope = sel
+                            ? [...document.querySelectorAll(sel)]
+                            : [...document.querySelectorAll('*')];
+                        el = scope.find(e =>
                             e.textContent.trim() === t
                             && e.offsetParent !== null
                             && e.children.length === 0
                         );
-                        if (!el) {
-                            el = all.find(e =>
-                                e.textContent.trim() === t
-                                && e.offsetParent !== null
-                            );
-                        }
+                        if (!el) el = scope.find(e =>
+                            e.textContent.trim() === t
+                            && e.offsetParent !== null
+                        );
                     }
-                    if (!el) return 'Element not found';
+                    if (!el && sel && !t) {
+                        const matches = document.querySelectorAll(sel);
+                        if (matches.length === 1) el = matches[0];
+                    }
+                    if (!el) return {error: 'Element not found for text="' + t + '"'};
 
                     // Walk up to find the clickable radio/checkbox container
                     let target = el;
                     let radio = el.closest('[role="radio"], [role="checkbox"], [role="option"]');
                     if (!radio) {
-                        // Check parent/grandparent for role
                         for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
                             const r = p.getAttribute('role');
                             if (r === 'radio' || r === 'checkbox' || r === 'option') {
@@ -206,51 +217,82 @@ class AgentAdapter(BaseAdapter):
                             if (p.tagName === 'LABEL') {
                                 const inp = p.querySelector('input');
                                 if (inp) { target = inp; break; }
-                                const forId = p.getAttribute('for');
-                                if (forId) {
-                                    const linked = document.getElementById(forId);
-                                    if (linked) { target = linked; break; }
-                                }
                             }
                         }
                     }
-                    if (radio) {
-                        target = radio;
-                        // Deselect siblings in the same group
-                        const group = radio.closest('[role="radiogroup"]')
-                            || radio.parentElement;
-                        if (group) {
-                            group.querySelectorAll('[role="radio"][aria-checked="true"]')
-                                .forEach(sib => sib.setAttribute('aria-checked', 'false'));
-                        }
-                        radio.setAttribute('aria-checked', 'true');
-                        // Also check hidden input if present
-                        const hiddenInput = radio.querySelector('input[type="radio"], input[type="checkbox"]');
-                        if (hiddenInput) {
-                            hiddenInput.checked = true;
-                            hiddenInput.dispatchEvent(new Event('change', {bubbles: true}));
-                        }
-                    }
+                    if (radio) target = radio;
 
                     target.scrollIntoView({block: 'center'});
+                    // Small delay for scroll to settle
                     const rect = target.getBoundingClientRect();
-                    const opts = {bubbles: true, cancelable: true, view: window,
-                                  clientX: rect.x + rect.width/2,
-                                  clientY: rect.y + rect.height/2};
-                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(type =>
-                        target.dispatchEvent(new PointerEvent(type, opts))
-                    );
-                    target.dispatchEvent(new Event('input',  {bubbles: true}));
-                    target.dispatchEvent(new Event('change', {bubbles: true}));
-                    if (target.focus) target.focus();
-                    const checked = target.getAttribute('aria-checked');
-                    const suffix = checked ? ' (aria-checked=' + checked + ')' : '';
-                    return 'Clicked: ' + target.tagName + '[role=' + (target.getAttribute('role')||'none') + '] '
-                        + el.textContent.trim().slice(0, 50) + suffix;
+                    return {
+                        x: Math.round(rect.x + rect.width / 2),
+                        y: Math.round(rect.y + rect.height / 2),
+                        tag: target.tagName,
+                        role: target.getAttribute('role') || 'none',
+                        text: t.slice(0, 50),
+                        ariaChecked: target.getAttribute('aria-checked')
+                    };
                 }"""
-                result = await page.evaluate(js, {"selector": selector, "text": text})
-                logger.info("force_click_element result: %s", result)
-                return ActionResult(extracted_content=str(result))
+                import json as _json
+                raw = await page.evaluate(find_js, {"selector": selector, "text": text})
+                info = _json.loads(raw) if isinstance(raw, str) else raw
+                if not info or "error" in info:
+                    msg = info.get("error", "Unknown error") if info else "No result"
+                    logger.warning("force_click_element: %s", msg)
+                    return ActionResult(extracted_content=str(msg))
+
+                x, y = info["x"], info["y"]
+                tag = info.get("tag", "?")
+                role = info.get("role", "?")
+                logger.info(
+                    "force_click_element: found %s[role=%s] at (%d,%d), sending CDP click",
+                    tag, role, x, y,
+                )
+
+                try:
+                    cdp_session = await browser_session.get_or_create_cdp_session()
+                    client = cdp_session.cdp_client
+                    sid = cdp_session.session_id
+
+                    for event_type in ("mousePressed", "mouseReleased"):
+                        await client.send_raw(
+                            "Input.dispatchMouseEvent",
+                            {
+                                "type": event_type,
+                                "x": x,
+                                "y": y,
+                                "button": "left",
+                                "clickCount": 1,
+                            },
+                            session_id=sid,
+                        )
+                except Exception as e:
+                    logger.warning("CDP click failed (%s), falling back to JS dispatch", e)
+                    fallback_js = """(args) => {
+                        const el = document.elementFromPoint(args.x, args.y);
+                        if (!el) return 'No element at coordinates';
+                        el.click();
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        return 'JS fallback clicked: ' + el.tagName;
+                    }"""
+                    fb_result = await page.evaluate(fallback_js, {"x": x, "y": y})
+                    return ActionResult(extracted_content=str(fb_result))
+
+                import asyncio as _aio
+                await _aio.sleep(0.3)
+
+                verify_js = """(args) => {
+                    const el = document.elementFromPoint(args.x, args.y);
+                    if (!el) return 'no element at point';
+                    const radio = el.closest('[role="radio"], [role="checkbox"]');
+                    if (radio) return 'aria-checked=' + radio.getAttribute('aria-checked');
+                    return 'clicked ' + el.tagName + ' (no aria role)';
+                }"""
+                verify = await page.evaluate(verify_js, {"x": x, "y": y})
+                result_msg = f"CDP clicked {tag}[role={role}] '{info.get('text','')}' → {verify}"
+                logger.info("force_click_element result: %s", result_msg)
+                return ActionResult(extracted_content=result_msg)
 
             @tools.action(description=(
                 "Set a form field value using JavaScript. Works for hidden inputs, "
