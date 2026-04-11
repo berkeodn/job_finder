@@ -6,24 +6,14 @@ import asyncio
 import logging
 import random
 
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Page, async_playwright
 
 from config import settings
 
 from .base import ApplicantProfile, ApplyResult, BaseAdapter, take_screenshot
+from .stealth import create_stealth_context
 
 logger = logging.getLogger(__name__)
-
-_ANTI_DETECT_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-]
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
 
 
 async def _random_delay(lo: float = 2.0, hi: float = 5.0) -> None:
@@ -33,57 +23,35 @@ async def _random_delay(lo: float = 2.0, hi: float = 5.0) -> None:
 async def _login(page: Page) -> bool:
     """Log into LinkedIn with email/password."""
     try:
-        await page.goto("https://www.linkedin.com/login", wait_until="load", timeout=30000)
-        await _random_delay(3, 5)
+        await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=30000)
+        await _random_delay(2, 4)
         await take_screenshot(page, "linkedin", "login_page")
 
-        # LinkedIn has multiple login page variants; wait for any visible input
-        email_selectors = [
-            'input#username',
-            'input[name="session_key"]',
-            'input[autocomplete="username"]',
-            'input[type="email"]',
-            'input[type="text"]',
-        ]
-        pass_selectors = [
-            'input#password',
-            'input[name="session_password"]',
-            'input[autocomplete="current-password"]',
-            'input[type="password"]',
-        ]
+        _EMAIL_SEL = (
+            'input#username, input[name="session_key"], '
+            'input[autocomplete="username"], input[type="email"]'
+        )
+        _PASS_SEL = (
+            'input#password, input[name="session_password"], '
+            'input[autocomplete="current-password"], input[type="password"]'
+        )
 
-        email_input = None
-        for sel in email_selectors:
-            loc = page.locator(sel).first
-            try:
-                await loc.wait_for(state="visible", timeout=3000)
-                email_input = loc
-                break
-            except Exception:
-                continue
-
-        if not email_input:
+        try:
+            await page.wait_for_selector(_EMAIL_SEL, state="visible", timeout=15000)
+        except Exception:
             await take_screenshot(page, "linkedin", "no_email_input")
             logger.error("Could not find email input on login page")
             return False
 
-        pass_input = None
-        for sel in pass_selectors:
-            loc = page.locator(sel).first
-            try:
-                await loc.wait_for(state="visible", timeout=3000)
-                pass_input = loc
-                break
-            except Exception:
-                continue
+        email_input = page.locator(_EMAIL_SEL).first
+        pass_input = page.locator(_PASS_SEL).first
 
-        if not pass_input:
-            await take_screenshot(page, "linkedin", "no_pass_input")
-            logger.error("Could not find password input on login page")
-            return False
-
+        await email_input.click()
+        await _random_delay(0.3, 0.6)
         await email_input.fill(settings.linkedin_email)
         await _random_delay(0.5, 1.5)
+        await pass_input.click()
+        await _random_delay(0.3, 0.6)
         await pass_input.fill(settings.linkedin_password)
         await _random_delay(0.5, 1.0)
         await page.click('button[type="submit"]')
@@ -174,17 +142,7 @@ class LinkedInAdapter(BaseAdapter):
             return ApplyResult(success=False, message="LinkedIn credentials not configured")
 
         async with async_playwright() as pw:
-            browser: Browser = await pw.chromium.launch(
-                headless=settings.headless,
-                args=_ANTI_DETECT_ARGS,
-            )
-            context = await browser.new_context(
-                user_agent=_USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-            )
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            browser, context = await create_stealth_context(pw)
             page = await context.new_page()
 
             try:

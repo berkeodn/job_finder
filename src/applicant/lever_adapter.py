@@ -6,8 +6,6 @@ import logging
 
 from playwright.async_api import Page, async_playwright
 
-from config import settings
-
 from .base import (
     ApplicantProfile,
     ApplyResult,
@@ -16,6 +14,7 @@ from .base import (
     match_field,
     take_screenshot,
 )
+from .stealth import create_stealth_context
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,8 @@ class LeverAdapter(BaseAdapter):
 
     async def apply(self, url: str, profile: ApplicantProfile) -> ApplyResult:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=settings.headless)
-            page = await browser.new_page()
+            browser, context = await create_stealth_context(pw)
+            page = await context.new_page()
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)

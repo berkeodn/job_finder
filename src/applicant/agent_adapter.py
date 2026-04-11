@@ -10,6 +10,7 @@ MAX_AGENT_STEPS = 20
 AGENT_TIMEOUT_SECONDS = 300
 
 from .base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
+from .stealth import _LAUNCH_ARGS, _STEALTH_JS, _USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,12 @@ class AgentAdapter(BaseAdapter):
                 f"If there are required fields you cannot fill, skip them and note them."
             )
 
-            browser_profile = BrowserProfile(headless=settings.headless)
+            browser_profile = BrowserProfile(
+                headless=settings.headless,
+                extra_chromium_args=_LAUNCH_ARGS,
+                user_agent=_USER_AGENT,
+                viewport={"width": 1280, "height": 800},
+            )
             cv_abs = str(Path(profile.cv_path).resolve())
 
             SCREENSHOT_DIR.mkdir(exist_ok=True)
