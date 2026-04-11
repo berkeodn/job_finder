@@ -23,6 +23,10 @@ class ApplicantProfile:
     phone: str
     linkedin_url: str
     location: str
+    address_line: str
+    city: str
+    postal_code: str
+    district: str
     education: str
     university: str
     current_company: str
@@ -90,6 +94,10 @@ def load_applicant_profile() -> ApplicantProfile:
         phone=settings.applicant_phone,
         linkedin_url=personal.get("linkedin_url", ""),
         location=personal.get("location", ""),
+        address_line=personal.get("address_line", ""),
+        city=personal.get("city", ""),
+        postal_code=personal.get("postal_code", ""),
+        district=personal.get("district", ""),
         education=personal.get("education", ""),
         university=personal.get("university", ""),
         current_company=personal.get("current_company", ""),

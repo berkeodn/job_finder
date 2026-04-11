@@ -79,9 +79,13 @@ class AgentAdapter(BaseAdapter):
                 f"- First Name: {profile.first_name}\n"
                 f"- Last Name: {profile.last_name}\n"
                 f"- Email: {profile.email}\n"
-                f"- Phone: {profile.phone}\n"
+                f"- Phone (local, without country code): {profile.phone}\n"
                 f"- LinkedIn: {profile.linkedin_url}\n"
                 f"- Location: {profile.location}\n"
+                f"- Address / Cadde/Sokak Adı: {profile.address_line}\n"
+                f"- City / Şehir: {profile.city}\n"
+                f"- District / Mahalle/Köy / İlçe: {profile.district}\n"
+                f"- Postal Code / Posta Kodu: {profile.postal_code}\n"
                 f"- Education: {profile.education}\n"
                 f"- University: {profile.university}\n"
                 f"- Years of Experience: {profile.experience_years}\n"
@@ -96,6 +100,13 @@ class AgentAdapter(BaseAdapter):
                 f"- Willing to Relocate: {profile.willing_to_relocate}\n"
                 f"- Work Mode Preference: {profile.work_mode_preference}\n"
                 f"- How did you hear about us: {profile.hear_about_us}\n"
+                f"\nPHONE NUMBER: The phone number above is the LOCAL number without country code. "
+                f"If the form has a separate 'Ülke Telefon Kodu' / country code dropdown already set to "
+                f"Türkiye (+90), enter ONLY the local number (e.g. 5077211015). "
+                f"Do NOT prepend +90 or 0. If there is no separate country code field, use +90{profile.phone}.\n"
+                f"\nADDRESS FIELDS: Workday has separate fields for address. Use the values above exactly. "
+                f"For autocomplete fields (Mahalle/Köy, Şehir), type the value and use the "
+                f"autocomplete_select tool to pick from suggestions.\n"
                 f"\nIf salary is asked in USD, EUR, or another currency, convert from the TL amount "
                 f"using approximate current exchange rates. For example 200000 TL ~ $5200 USD ~ 4800 EUR.\n"
                 f"For English proficiency questions, pick the closest option to C1: "
@@ -136,15 +147,18 @@ class AgentAdapter(BaseAdapter):
                 f"- For dropdowns: click the dropdown button, then click the option.\n"
                 f"- set_form_value is ONLY for hidden inputs or native <select> elements.\n"
                 f"- NEVER repeat the same failing action more than 2 times. "
-                f"Try a different method or SKIP the field.\n\n"
-                f"AUTOCOMPLETE / TYPEAHEAD FIELDS:\n"
-                f"Some fields (city, country, address) require selecting from a suggestion dropdown:\n"
-                f"1. Use the 'input' action to type the value (character by character).\n"
-                f"2. After typing, WAIT 2-3 seconds for suggestions to appear.\n"
-                f"3. Look for role='listbox' or role='option' elements and CLICK the matching one.\n"
-                f"4. Do NOT press Enter — it may dismiss the dropdown without selecting.\n"
-                f"5. If no dropdown appears, try variant spelling (e.g. 'İstanbul' vs 'Istanbul').\n"
-                f"6. If still stuck after 3 attempts, skip the field and move on."
+                f"Try a different method or SKIP the field.\n"
+                f"- VALIDATION ERRORS: When you click 'İleri'/'Next' and see errors, "
+                f"read EACH error message carefully. They may be about DIFFERENT fields. "
+                f"Do NOT assume all errors are about the last field you edited. "
+                f"Fix each specific field mentioned in the error.\n\n"
+                f"AUTOCOMPLETE / TYPEAHEAD FIELDS (Mahalle/Köy, Şehir, Ülke, etc.):\n"
+                f"Use the autocomplete_select tool for these fields. It types, waits for suggestions, "
+                f"and clicks the best match automatically. Examples:\n"
+                f"  autocomplete_select(label='Mahalle/Köy', value='Etimesgut')\n"
+                f"  autocomplete_select(label='Şehir', value='Ankara')\n"
+                f"If autocomplete_select fails, skip the field and move on. "
+                f"Do NOT retry the same autocomplete field more than 2 times."
             )
 
             from browser_use import ActionResult, Tools
@@ -311,33 +325,162 @@ class AgentAdapter(BaseAdapter):
                 if not page:
                     return ActionResult(extracted_content="No active page found")
                 try:
-                    element = None
-                    if label:
-                        element = page.get_by_label(label, exact=False)
-                        if await element.count() == 0:
-                            element = page.locator(
-                                f"input[aria-label*='{label}'], "
-                                f"textarea[aria-label*='{label}']"
-                            )
-                    if (not element or await element.count() == 0) and name:
-                        element = page.locator(
-                            f"input[name*='{name}'], textarea[name*='{name}']"
-                        )
-                    if not element or await element.count() == 0:
+                    find_js = """(args) => {
+                        const label = (args.label || '').trim();
+                        const name = (args.name || '').trim();
+                        let input;
+                        if (label) {
+                            const labels = [...document.querySelectorAll('label')];
+                            const match = labels.find(l => l.textContent.trim().includes(label));
+                            if (match) {
+                                const forId = match.getAttribute('for');
+                                if (forId) input = document.getElementById(forId);
+                                if (!input) input = match.querySelector('input, textarea, select');
+                                if (!input) {
+                                    let sib = match.nextElementSibling;
+                                    while (sib && !input) {
+                                        input = sib.querySelector('input, textarea, select') || (sib.matches('input, textarea, select') ? sib : null);
+                                        sib = sib.nextElementSibling;
+                                    }
+                                }
+                            }
+                            if (!input) input = document.querySelector(
+                                `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
+                            );
+                            if (!input) input = document.querySelector(
+                                `input[placeholder*="${label}"], textarea[placeholder*="${label}"]`
+                            );
+                        }
+                        if (!input && name) {
+                            input = document.querySelector(
+                                `input[name*="${name}"], textarea[name*="${name}"]`
+                            );
+                        }
+                        if (!input) return null;
+                        input.scrollIntoView({block: 'center'});
+                        input.focus();
+                        input.click();
+                        return {tag: input.tagName, name: input.name || '', id: input.id || ''};
+                    }"""
+                    info = await page.evaluate(find_js, {"label": label, "name": name})
+                    if not info:
                         msg = f"Field not found: label='{label}', name='{name}'"
                         logger.warning("fill_text_field: %s", msg)
                         return ActionResult(extracted_content=msg)
-                    target = element.first
-                    await target.scroll_into_view_if_needed()
-                    await target.click()
-                    await target.fill(value)
-                    tag = await target.evaluate("el => el.tagName")
-                    actual = await target.evaluate("el => el.value")
-                    msg = f"Filled {tag} (label='{label}', name='{name}') with '{value}' (actual='{actual}')"
+
+                    await page.keyboard.press("Control+a")
+                    await page.keyboard.press("Delete")
+                    await page.keyboard.type(value, delay=30)
+
+                    actual = await page.evaluate("""() => {
+                        const el = document.activeElement;
+                        return el ? el.value : '';
+                    }""")
+                    msg = (
+                        f"Filled {info['tag']} (label='{label}', name='{info['name']}') "
+                        f"with '{value}' (actual='{actual}')"
+                    )
                     logger.info("fill_text_field: %s", msg)
                     return ActionResult(extracted_content=msg)
                 except Exception as e:
                     msg = f"fill_text_field error: {e}"
+                    logger.warning(msg)
+                    return ActionResult(extracted_content=msg)
+
+            @tools.action(description=(
+                "Type into an autocomplete/typeahead field and click the matching suggestion. "
+                "Use for fields like Mahalle/Köy, Şehir, Ülke that require selecting from a dropdown. "
+                "Finds the input by label, types the value, waits for suggestions, and clicks the best match."
+            ))
+            async def autocomplete_select(
+                browser_session,
+                label: str = "",
+                name: str = "",
+                value: str = "",
+            ) -> ActionResult:
+                page = await browser_session.get_current_page()
+                if not page:
+                    return ActionResult(extracted_content="No active page found")
+                try:
+                    find_js = """(args) => {
+                        const label = (args.label || '').trim();
+                        const name = (args.name || '').trim();
+                        let input;
+                        if (label) {
+                            const labels = [...document.querySelectorAll('label')];
+                            const match = labels.find(l => l.textContent.trim().includes(label));
+                            if (match) {
+                                const forId = match.getAttribute('for');
+                                if (forId) input = document.getElementById(forId);
+                                if (!input) input = match.querySelector('input, textarea');
+                                if (!input) {
+                                    let sib = match.nextElementSibling;
+                                    while (sib && !input) {
+                                        input = sib.querySelector('input, textarea') || (sib.matches('input, textarea') ? sib : null);
+                                        sib = sib.nextElementSibling;
+                                    }
+                                }
+                            }
+                            if (!input) input = document.querySelector(
+                                `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
+                            );
+                        }
+                        if (!input && name) {
+                            input = document.querySelector(`input[name*="${name}"]`);
+                        }
+                        if (!input) return null;
+                        input.scrollIntoView({block: 'center'});
+                        input.focus();
+                        input.click();
+                        return {tag: input.tagName, name: input.name || '', id: input.id || ''};
+                    }"""
+                    info = await page.evaluate(find_js, {"label": label, "name": name})
+                    if not info:
+                        msg = f"autocomplete_select: field not found: label='{label}', name='{name}'"
+                        logger.warning(msg)
+                        return ActionResult(extracted_content=msg)
+
+                    await page.keyboard.press("Control+a")
+                    await page.keyboard.press("Delete")
+                    await page.keyboard.type(value, delay=80)
+
+                    import asyncio as _aio
+                    await _aio.sleep(2)
+
+                    click_js = """(args) => {
+                        const val = args.value.toLowerCase();
+                        const options = document.querySelectorAll(
+                            '[role="option"], [role="listbox"] li, .css-1dimb5e-singleValue, ' +
+                            'ul[role="listbox"] > li, div[data-automation-id*="promptOption"], ' +
+                            '[data-automation-id*="selectOption"]'
+                        );
+                        for (const opt of options) {
+                            if (opt.textContent.toLowerCase().includes(val)) {
+                                opt.scrollIntoView({block: 'center'});
+                                opt.click();
+                                return 'Selected: ' + opt.textContent.trim();
+                            }
+                        }
+                        const allVisible = document.querySelectorAll(
+                            '[role="option"], li[tabindex], div[data-automation-id] li'
+                        );
+                        if (allVisible.length > 0) {
+                            allVisible[0].click();
+                            return 'Selected first option: ' + allVisible[0].textContent.trim();
+                        }
+                        return 'NO_SUGGESTIONS';
+                    }"""
+                    result = await page.evaluate(click_js, {"value": value})
+                    msg = f"autocomplete_select(label='{label}', value='{value}'): {result}"
+                    logger.info(msg)
+
+                    if result == "NO_SUGGESTIONS":
+                        await page.keyboard.press("Enter")
+                        msg += " — pressed Enter as fallback"
+
+                    return ActionResult(extracted_content=msg)
+                except Exception as e:
+                    msg = f"autocomplete_select error: {e}"
                     logger.warning(msg)
                     return ActionResult(extracted_content=msg)
 
