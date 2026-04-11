@@ -2,13 +2,12 @@ name: Auto Apply Runner
 
 on:
   schedule:
-    # Runs every 30 minutes
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
   auto-apply:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - name: Checkout repo
@@ -23,22 +22,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-
       - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: playwright install chromium --with-deps
+        run: playwright install chromium
 
-      - name: Install Playwright deps only (cached)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: playwright install-deps chromium
-
-      - name: Download previous DB
+      - name: Download latest DB from scrape workflow
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
@@ -49,12 +36,7 @@ jobs:
 
       - name: Verify DB exists
         run: |
-          if [ -f jobs.db ]; then
-            echo "DB found, checking contents..."
-            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); print(f'Jobs in DB: {s.query(Job).count()}'); s.close()"
-          else
-            echo "WARNING: No jobs.db found!"
-          fi
+          python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); print(f'Jobs in DB: {s.query(Job).count()}'); s.close()"
 
       - name: Run auto-apply
         env:
@@ -66,13 +48,8 @@ jobs:
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
           IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
-          HEADLESS: "false"
-          DISPLAY: ":99"
-        run: |
-          sudo apt-get install -y xvfb > /dev/null 2>&1
-          Xvfb :99 -screen 0 1280x800x24 &
-          sleep 1
-          python -m src.applicant.runner
+          HEADLESS: "true"
+        run: python -m src.applicant.runner
 
       - name: Upload DB artifact
         if: always() && hashFiles('jobs.db') != ''
