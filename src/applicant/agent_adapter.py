@@ -6,8 +6,8 @@ import asyncio
 import logging
 from pathlib import Path
 
-MAX_AGENT_STEPS = 25
-AGENT_TIMEOUT_SECONDS = 420
+MAX_AGENT_STEPS = 40
+AGENT_TIMEOUT_SECONDS = 480
 
 from .base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
 from .email_verifier import fetch_linkedin_verification_code
@@ -120,14 +120,24 @@ class AgentAdapter(BaseAdapter):
                 f"Do NOT keep retrying the same action if it triggers a login popup — report failure instead. "
                 f"If there are required fields you cannot fill, skip them and note them.\n\n"
                 f"CUSTOM FORM INTERACTION TOOLS:\n"
-                f"If clicking a form element (radio button, checkbox, dropdown option) does NOT work "
-                f"after 2 normal click attempts, use 'force_click_element' with the element's visible "
-                f"text. Example: force_click_element(text=\"No\") or force_click_element(text=\"Male\").\n"
-                f"If force_click_element also fails, use 'set_form_value' with the element's CSS selector "
-                f"and the desired value. Example: set_form_value(selector=\"input[name='salary']\", value=\"200000\").\n"
-                f"NEVER attempt the same click action more than 3 times — if it doesn't work, "
-                f"switch to force_click_element or set_form_value instead. "
-                f"If ALL methods fail for a field after 3-4 total attempts, skip it and move on."
+                f"- For radio buttons/checkboxes that don't respond to normal clicks (common on Workday): "
+                f"use force_click_element(text=\"Hayır\") or force_click_element(text=\"No\"). "
+                f"This sets aria-checked and dispatches proper events. Only pass text OR selector, not both.\n"
+                f"- For hidden inputs or React-controlled fields: "
+                f"use set_form_value(selector=\"input[name='field']\", value=\"myvalue\").\n"
+                f"- NEVER repeat the same failing action more than 2 times. "
+                f"Escalate: normal click → force_click_element → set_form_value → skip.\n"
+                f"- If ALL methods fail for a field after 3 total attempts, SKIP it and move on.\n\n"
+                f"AUTOCOMPLETE / TYPEAHEAD FIELDS:\n"
+                f"Some fields (city, country, address) are autocomplete inputs that require selecting "
+                f"from a suggestion dropdown. If you type a value and the form still shows an error:\n"
+                f"1. Clear the field, type the value slowly (the input action already types character by character).\n"
+                f"2. After typing, WAIT 2-3 seconds for a dropdown/listbox to appear.\n"
+                f"3. Look for a list of suggestions (often role='listbox' or role='option' elements) "
+                f"and CLICK the matching suggestion. Do NOT press Enter — that may dismiss the dropdown.\n"
+                f"4. If no dropdown appears after typing, try a shorter/different spelling "
+                f"(e.g. 'İstanbul' instead of 'Istanbul').\n"
+                f"5. If still stuck after 3 attempts, skip the field and move on."
             )
 
             from browser_use import ActionResult, Tools
@@ -151,9 +161,9 @@ class AgentAdapter(BaseAdapter):
 
             @tools.action(description=(
                 "Force-click an element using JavaScript when normal click doesn't work. "
-                "Useful for custom UI frameworks like Workday where standard clicks fail. "
-                "Provide EITHER a CSS selector OR the visible text of the element (not both). "
-                "This dispatches real mouse events (mousedown, mouseup, click, change)."
+                "Useful for Workday and other custom UI frameworks. "
+                "Provide EITHER a CSS selector OR the visible text of the element. "
+                "Handles aria-checked radio buttons, hidden inputs, and React components."
             ))
             async def force_click_element(
                 browser_session,
@@ -167,32 +177,76 @@ class AgentAdapter(BaseAdapter):
                     let el;
                     if (args.selector) el = document.querySelector(args.selector);
                     if (!el && args.text) {
+                        const t = args.text.trim();
                         const all = [...document.querySelectorAll('*')];
                         el = all.find(e =>
-                            e.textContent.trim() === args.text
+                            e.textContent.trim() === t
                             && e.offsetParent !== null
+                            && e.children.length === 0
                         );
                         if (!el) {
                             el = all.find(e =>
-                                e.textContent.trim().includes(args.text)
+                                e.textContent.trim() === t
                                 && e.offsetParent !== null
-                                && e.children.length === 0
                             );
                         }
                     }
                     if (!el) return 'Element not found';
-                    el.scrollIntoView({block: 'center'});
-                    const rect = el.getBoundingClientRect();
-                    const opts = {bubbles: true, cancelable: true,
+
+                    // Walk up to find the clickable radio/checkbox container
+                    let target = el;
+                    let radio = el.closest('[role="radio"], [role="checkbox"], [role="option"]');
+                    if (!radio) {
+                        // Check parent/grandparent for role
+                        for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+                            const r = p.getAttribute('role');
+                            if (r === 'radio' || r === 'checkbox' || r === 'option') {
+                                radio = p; break;
+                            }
+                            if (p.tagName === 'LABEL') {
+                                const inp = p.querySelector('input');
+                                if (inp) { target = inp; break; }
+                                const forId = p.getAttribute('for');
+                                if (forId) {
+                                    const linked = document.getElementById(forId);
+                                    if (linked) { target = linked; break; }
+                                }
+                            }
+                        }
+                    }
+                    if (radio) {
+                        target = radio;
+                        // Deselect siblings in the same group
+                        const group = radio.closest('[role="radiogroup"]')
+                            || radio.parentElement;
+                        if (group) {
+                            group.querySelectorAll('[role="radio"][aria-checked="true"]')
+                                .forEach(sib => sib.setAttribute('aria-checked', 'false'));
+                        }
+                        radio.setAttribute('aria-checked', 'true');
+                        // Also check hidden input if present
+                        const hiddenInput = radio.querySelector('input[type="radio"], input[type="checkbox"]');
+                        if (hiddenInput) {
+                            hiddenInput.checked = true;
+                            hiddenInput.dispatchEvent(new Event('change', {bubbles: true}));
+                        }
+                    }
+
+                    target.scrollIntoView({block: 'center'});
+                    const rect = target.getBoundingClientRect();
+                    const opts = {bubbles: true, cancelable: true, view: window,
                                   clientX: rect.x + rect.width/2,
                                   clientY: rect.y + rect.height/2};
                     ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(type =>
-                        el.dispatchEvent(new PointerEvent(type, opts))
+                        target.dispatchEvent(new PointerEvent(type, opts))
                     );
-                    el.dispatchEvent(new Event('input',  {bubbles: true}));
-                    el.dispatchEvent(new Event('change', {bubbles: true}));
-                    el.focus && el.focus();
-                    return 'Clicked: ' + el.tagName + ' ' + el.textContent.trim().slice(0, 60);
+                    target.dispatchEvent(new Event('input',  {bubbles: true}));
+                    target.dispatchEvent(new Event('change', {bubbles: true}));
+                    if (target.focus) target.focus();
+                    const checked = target.getAttribute('aria-checked');
+                    const suffix = checked ? ' (aria-checked=' + checked + ')' : '';
+                    return 'Clicked: ' + target.tagName + '[role=' + (target.getAttribute('role')||'none') + '] '
+                        + el.textContent.trim().slice(0, 50) + suffix;
                 }"""
                 result = await page.evaluate(js, {"selector": selector, "text": text})
                 logger.info("force_click_element result: %s", result)
