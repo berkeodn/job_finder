@@ -53,7 +53,7 @@ jobs:
         run: |
           if (Test-Path "jobs.db") {
             venv\Scripts\Activate.ps1
-            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status != 'not_applied').all(); import json; open('_apply_backup.json','w').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print(f'Backed up {len(rows)} apply statuses'); s.close()"
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', '', 'approved'])).all(); import json; open('_apply_backup.json','w').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print(f'Backed up {len(rows)} apply statuses (applied/failed/captcha/closed only)'); s.close()"
           } else {
             Write-Host "No local DB yet"
           }
@@ -81,7 +81,7 @@ jobs:
         if: ${{ github.event.inputs.reset_jobs != '0' && github.event.inputs.reset_jobs != '' }}
         run: |
           venv\Scripts\Activate.ps1
-          python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); n = min(int('${{ github.event.inputs.reset_jobs }}'), 5); jobs = s.query(Job).filter(Job.apply_status.in_(['applied', 'failed', 'captcha']), Job.match_score >= 60).limit(n).all(); jobs = jobs or s.query(Job).filter(Job.notified == True, Job.apply_status.notin_(['approved', 'closed', 'applied']), Job.match_score >= 60).order_by(Job.match_score.desc()).offset(3).limit(n).all(); [print(f'Reset: {j.title} @ {j.company} ({j.apply_status} -> approved)') or setattr(j, 'apply_status', 'approved') or setattr(j, 'applied_at', None) for j in jobs]; s.commit(); print(f'Total reset: {len(jobs)}'); s.close()"
+          python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); n = min(int('${{ github.event.inputs.reset_jobs }}'), 5); cleared = s.query(Job).filter(Job.apply_status == 'approved').update({Job.apply_status: 'not_applied'}); print(f'Cleared {cleared} old approved jobs'); jobs = s.query(Job).filter(Job.apply_status.in_(['applied', 'failed', 'captcha']), Job.match_score >= 60).limit(n).all(); jobs = jobs or s.query(Job).filter(Job.notified == True, Job.apply_status == 'not_applied', Job.match_score >= 60).order_by(Job.match_score.desc()).limit(n).all(); [print(f'Reset: {j.title} @ {j.company} ({j.apply_status} -> approved)') or setattr(j, 'apply_status', 'approved') or setattr(j, 'applied_at', None) for j in jobs]; s.commit(); print(f'Total reset: {len(jobs)}'); s.close()"
 
       - name: Run auto-apply
         env:
