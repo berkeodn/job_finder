@@ -10,7 +10,7 @@ from src.db.database import get_session, init_db
 from src.db.models import Job
 from src.matcher.gemini import score_job
 from src.matcher.profile import is_blacklisted, load_profile, passes_prefilter
-from src.notifier.telegram import send_alert, send_job_notification
+from src.notifier.telegram import send_alert, send_job_notification, send_rejected_notification
 from src.scraper.linkedin import fetch_descriptions, scrape_page
 
 logging.basicConfig(
@@ -299,19 +299,22 @@ def _send_summary(stats: dict, below_threshold: list | None = None) -> None:
         f"AI scored:     {stats['scored']}",
         f"Notified:      {stats['notified']}",
     ]
+    send_alert("\n".join(lines))
 
     if below_threshold:
-        lines.append(f"\n🚫 Rejected by AI (score < {settings.score_threshold}):")
         for job in below_threshold:
-            reason = job.rejection_reason or "—"
             missing = json.loads(job.missing_skills or "[]")
-            missing_str = ", ".join(missing[:3]) if missing else "—"
-            lines.append(f"  [{int(job.match_score)}] {job.title} @ {job.company}")
-            lines.append(f"       {reason}")
-            lines.append(f"       Missing: {missing_str}")
-            lines.append(f"       {job.url}")
-
-    send_alert("\n".join(lines))
+            send_rejected_notification(
+                title=job.title,
+                company=job.company,
+                location=job.location,
+                url=job.url,
+                score=int(job.match_score),
+                rejection_reason=job.rejection_reason or "",
+                missing_skills=missing,
+                posted_time=job.posted_time,
+                work_type=job.work_type,
+            )
 
 
 if __name__ == "__main__":

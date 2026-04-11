@@ -1,13 +1,7 @@
-import re
 from pathlib import Path
 from dataclasses import dataclass, field
 
 import yaml
-
-_EXPERIENCE_RE = re.compile(
-    r"(\d+)\+?\s*(?:years?|yıl|yil)",
-    re.IGNORECASE,
-)
 
 
 @dataclass
@@ -50,15 +44,6 @@ def load_profile(path: str = "profile.yaml") -> Profile:
     )
 
 
-def _exceeds_experience(text: str, max_years: int) -> bool:
-    """Return True if the text requires more experience than max_years."""
-    for match in _EXPERIENCE_RE.finditer(text):
-        required = int(match.group(1))
-        if required > max_years:
-            return True
-    return False
-
-
 def passes_prefilter(title: str, description: str, profile: Profile) -> bool:
     """Fast keyword-based check before sending to the AI scorer."""
     text = f"{title} {description}".lower()
@@ -69,9 +54,6 @@ def passes_prefilter(title: str, description: str, profile: Profile) -> bool:
     if profile.must_have_any and not any(
         term in text for term in profile.must_have_any
     ):
-        return False
-
-    if _exceeds_experience(text, profile.max_experience_years):
         return False
 
     return True
