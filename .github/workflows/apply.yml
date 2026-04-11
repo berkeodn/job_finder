@@ -20,8 +20,15 @@ jobs:
         run: |
           if (-not (Test-Path "venv")) { python -m venv venv }
           venv\Scripts\Activate.ps1
-          python -m pip install -q -r requirements.txt
-          python -m playwright install chromium
+          $hash = (Get-FileHash requirements.txt -Algorithm MD5).Hash
+          $marker = "venv\.deps_$hash"
+          if (-not (Test-Path $marker)) {
+            python -m pip install -q -r requirements.txt
+            python -m playwright install chromium
+            New-Item -Path $marker -ItemType File -Force | Out-Null
+          } else {
+            Write-Host "Dependencies already up to date, skipping install"
+          }
 
       - name: Copy and clean LinkedIn session if available
         run: |
