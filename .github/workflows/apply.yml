@@ -45,6 +45,16 @@ jobs:
           path: .
           search_artifacts: true
           if_no_artifact_found: warn
+          workflow: scrape.yml
+
+      - name: Verify DB exists
+        run: |
+          if [ -f jobs.db ]; then
+            echo "DB found, checking contents..."
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); print(f'Jobs in DB: {s.query(Job).count()}'); s.close()"
+          else
+            echo "WARNING: No jobs.db found!"
+          fi
 
       - name: Run auto-apply
         env:
@@ -59,7 +69,7 @@ jobs:
         run: python -m src.applicant.runner
 
       - name: Upload DB artifact
-        if: always()
+        if: always() && hashFiles('jobs.db') != ''
         uses: actions/upload-artifact@v4
         with:
           name: jobs-db
