@@ -49,13 +49,15 @@ jobs:
             Write-Host "No saved session found - login will be required"
           }
 
-      - name: Download latest DB artifact
+      - name: Download DB artifact (only if no local DB)
+        if: ${{ hashFiles('jobs.db') == '' }}
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
           path: .
           search_artifacts: true
           if_no_artifact_found: warn
+          workflow: scrape.yml
 
       - name: Verify DB exists
         run: |
