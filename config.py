@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     max_daily_applications: int = 20
     headless: bool = True
 
+    # IMAP settings for LinkedIn email verification code
+    imap_server: str = "imap.gmail.com"
+    imap_email: str = ""  # defaults to linkedin_email if empty
+    imap_password: str = ""  # Gmail App Password
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

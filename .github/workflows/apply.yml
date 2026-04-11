@@ -65,6 +65,7 @@ jobs:
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
           HEADLESS: "true"
         run: python -m src.applicant.runner
 

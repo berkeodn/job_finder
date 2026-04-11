@@ -11,6 +11,7 @@ from playwright.async_api import Page, async_playwright
 from config import settings
 
 from .base import ApplicantProfile, ApplyResult, BaseAdapter, take_screenshot
+from .email_verifier import fetch_linkedin_verification_code
 from .stealth import create_stealth_context
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,33 @@ async def _login(page: Page) -> bool:
             logger.info("LinkedIn login successful")
             return True
 
-        if "challenge" in page.url or "checkpoint" in page.url:
+        # Email verification challenge
+        if "checkpoint" in page.url or "challenge" in page.url:
+            await take_screenshot(page, "linkedin", "verification_page")
+            code_input = page.locator('input#input__email_verification_pin, input[name="pin"]')
+            if await code_input.count() > 0:
+                logger.info("Email verification required, fetching code via IMAP...")
+                code = await asyncio.to_thread(fetch_linkedin_verification_code)
+                if code:
+                    await code_input.first.fill(code)
+                    await _random_delay(0.5, 1.0)
+                    submit = page.locator('button#email-pin-submit-button, button[type="submit"]')
+                    if await submit.count() > 0:
+                        await submit.first.click()
+                        await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                        await _random_delay(3, 5)
+                        await take_screenshot(page, "linkedin", "after_verification")
+
+                        if "/feed" in page.url or "/mynetwork" in page.url or "/jobs" in page.url:
+                            logger.info("LinkedIn login successful after email verification")
+                            return True
+
+                        logger.warning("Verification submitted but login not confirmed: %s", page.url)
+                        return "/login" not in page.url
+                else:
+                    logger.warning("Could not fetch verification code from email")
+                    return False
+
             logger.warning("LinkedIn security challenge detected — login blocked")
             await take_screenshot(page, "linkedin", "challenge_blocked")
             return False

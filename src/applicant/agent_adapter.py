@@ -6,11 +6,12 @@ import asyncio
 import logging
 from pathlib import Path
 
-MAX_AGENT_STEPS = 20
+MAX_AGENT_STEPS = 25
 AGENT_TIMEOUT_SECONDS = 300
 
 from .base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
-from .stealth import _LAUNCH_ARGS, _STEALTH_JS, _USER_AGENT
+from .email_verifier import fetch_linkedin_verification_code
+from .stealth import _LAUNCH_ARGS, _USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,30 @@ class AgentAdapter(BaseAdapter):
                 f"If you encounter a CAPTCHA at any point, STOP immediately and report 'CAPTCHA_BLOCKED'. "
                 f"Do NOT attempt to solve captchas. "
                 f"Do NOT keep retrying the same action if it triggers a login popup — report failure instead. "
+                f"If LinkedIn asks for an email verification code, call the "
+                f"'get_linkedin_verification_code' action to retrieve it from email, "
+                f"then enter the code and submit. "
                 f"If there are required fields you cannot fill, skip them and note them."
             )
+
+            from browser_use import ActionResult, Tools
+
+            tools = Tools()
+
+            @tools.action(description=(
+                "Fetch the LinkedIn email verification code. "
+                "Call this when LinkedIn asks for a verification code sent to email. "
+                "Returns the 6-digit code or an error message."
+            ))
+            async def get_linkedin_verification_code() -> ActionResult:
+                logger.info("Agent requested LinkedIn verification code via IMAP")
+                code = await asyncio.to_thread(fetch_linkedin_verification_code)
+                if code:
+                    return ActionResult(extracted_content=f"Verification code: {code}")
+                return ActionResult(
+                    extracted_content="Could not fetch verification code from email. Report CAPTCHA_BLOCKED.",
+                    error="Verification code not found",
+                )
 
             browser_profile = BrowserProfile(
                 headless=settings.headless,
@@ -106,6 +129,7 @@ class AgentAdapter(BaseAdapter):
                 task=task_prompt,
                 llm=llm,
                 browser_profile=browser_profile,
+                tools=tools,
                 available_file_paths=[cv_abs],
                 save_conversation_path=str(SCREENSHOT_DIR / "agent_conversation.json"),
                 max_steps=MAX_AGENT_STEPS,
