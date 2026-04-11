@@ -60,6 +60,12 @@ async def _apply_to_job(
     """Run the appropriate adapter. Falls back to agent if rule-based fails."""
     target_url = job.url
     adapter_key = _pick_adapter(target_url)
+
+    # LinkedIn jobs go directly to the AI agent (rule-based adapter
+    # struggles with login security checks that the agent can handle)
+    if adapter_key == "linkedin":
+        adapter_key = "agent"
+
     adapter = _ADAPTERS[adapter_key]
     logger.info("Applying to '%s' @ %s via %s", job.title, job.company, adapter.name)
 
@@ -74,12 +80,6 @@ async def _apply_to_job(
         adapter = _ADAPTERS[adapter_key]
         logger.info("Re-routing to %s adapter", adapter.name)
         result = await adapter.apply(target_url, profile)
-
-    # Fallback to AI agent if rule-based adapter failed
-    if not result.success and adapter_key != "agent":
-        logger.info("Rule-based adapter failed, falling back to AI agent")
-        agent = _ADAPTERS["agent"]
-        result = await agent.apply(target_url, profile)
 
     # After all attempts, if captcha is the final result, mark accordingly
     if not result.success and "captcha" in result.message.lower():
