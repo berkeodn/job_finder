@@ -175,6 +175,7 @@ async def run() -> None:
             key = (job.title.strip().lower(), job.company.strip().lower())
             if key in seen_pairs or _is_duplicate(job):
                 job.notified = True
+                job.match_score = -1.0
                 logger.info("Duplicate retry (already notified): %s @ %s", job.title, job.company)
             else:
                 seen_pairs.add(key)
