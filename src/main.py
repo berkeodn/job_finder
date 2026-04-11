@@ -127,7 +127,8 @@ async def run() -> None:
                 logger.info("Filtered so far: %d / %d target", len(candidates), target)
 
         stats["prefiltered"] = len(candidates)
-        logger.info("Total scraped: %d, new: %d, filtered: %d", stats["scraped"], stats["new"], stats["prefiltered"])
+        stats["retried"] = len(retry_jobs)
+        logger.info("Total scraped: %d, new: %d, filtered: %d, retried: %d", stats["scraped"], stats["new"], stats["prefiltered"], stats["retried"])
 
         if not candidates and not retry_jobs:
             logger.info("No jobs to score. Done.")
@@ -284,6 +285,7 @@ def _log_summary(stats: dict) -> None:
     logger.info("  Scraped:      %d", stats["scraped"])
     logger.info("  New (deduped): %d", stats["new"])
     logger.info("  Pre-filtered:  %d", stats["prefiltered"])
+    logger.info("  Retried:       %d", stats.get("retried", 0))
     logger.info("  AI scored:     %d", stats["scored"])
     logger.info("  Notified:      %d", stats["notified"])
     logger.info("========================")
@@ -291,11 +293,16 @@ def _log_summary(stats: dict) -> None:
 
 def _send_summary(stats: dict, below_threshold: list | None = None) -> None:
     icon = "✅" if stats["notified"] > 0 else "📭"
+    retried = stats.get("retried", 0)
     lines = [
         f"{icon} Pipeline Summary\n",
         f"Scraped:       {stats['scraped']}",
         f"New (deduped): {stats['new']}",
         f"Pre-filtered:  {stats['prefiltered']}",
+    ]
+    if retried:
+        lines.append(f"Retried:       {retried}")
+    lines += [
         f"AI scored:     {stats['scored']}",
         f"Notified:      {stats['notified']}",
     ]

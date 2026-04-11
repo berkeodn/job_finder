@@ -42,7 +42,7 @@ Description:
 {description}
 """
 
-_FALLBACK_SCORE = {"score": 0, "reasons": ["Failed to parse AI response"], "missing_skills": []}
+_FALLBACK_SCORE = {"score": 0, "reasons": ["Failed to parse AI response"], "missing_skills": [], "rejection_reason": "AI response parsing failed"}
 
 
 def _build_profile_text(profile: Profile) -> str:
@@ -65,6 +65,8 @@ def _parse_response(text: str) -> dict:
     text = text.strip()
 
     result = json.loads(text)
+    if isinstance(result, list):
+        result = result[0] if result else {}
     return {
         "score": int(result.get("score", 0)),
         "reasons": result.get("reasons", []),
@@ -111,8 +113,8 @@ def score_job(
                 "Remaining jobs will be scored in the next run."
             )
             raise
-        return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": []}
+        return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": [], "rejection_reason": str(e)[:200]}
     except Exception as e:
         logger.error("AI API error: %s", e)
         send_alert(f"⚠️ AI API unexpected error:\n\n{e}")
-        return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": []}
+        return {"score": 0, "reasons": [f"API error: {e}"], "missing_skills": [], "rejection_reason": str(e)[:200]}
