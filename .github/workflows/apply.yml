@@ -20,8 +20,8 @@ jobs:
         run: |
           if (-not (Test-Path "venv")) { python -m venv venv }
           venv\Scripts\Activate.ps1
-          pip install -q -r requirements.txt
-          playwright install chromium
+          python -m pip install -q -r requirements.txt
+          python -m playwright install chromium
 
       - name: Copy and clean LinkedIn session if available
         run: |
