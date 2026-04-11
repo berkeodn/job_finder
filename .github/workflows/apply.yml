@@ -66,8 +66,13 @@ jobs:
           APPLICANT_EMAIL: ${{ secrets.APPLICANT_EMAIL }}
           APPLICANT_PHONE: ${{ secrets.APPLICANT_PHONE }}
           IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
-          HEADLESS: "true"
-        run: python -m src.applicant.runner
+          HEADLESS: "false"
+          DISPLAY: ":99"
+        run: |
+          sudo apt-get install -y xvfb > /dev/null 2>&1
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 1
+          python -m src.applicant.runner
 
       - name: Upload DB artifact
         if: always() && hashFiles('jobs.db') != ''
