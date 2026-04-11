@@ -32,20 +32,31 @@ class AgentAdapter(BaseAdapter):
             )
 
             is_linkedin = "linkedin.com" in url.lower()
+            has_session = SESSION_PATH.exists()
 
             login_instructions = ""
-            if is_linkedin and settings.linkedin_email and settings.linkedin_password:
-                login_instructions = (
-                    f"IMPORTANT — LinkedIn requires login before applying.\n"
-                    f"1. First go to https://www.linkedin.com/login\n"
-                    f"2. Enter email: {settings.linkedin_email}\n"
-                    f"3. Enter password: {settings.linkedin_password}\n"
-                    f"4. Click 'Sign in' and wait for the page to load.\n"
-                    f"5. If you see a CAPTCHA on the login page, STOP and report 'CAPTCHA_BLOCKED'.\n"
-                    f"6. After successful login, navigate to {url}\n"
-                    f"7. Click 'Easy Apply' if available, fill any required fields, and submit.\n"
-                    f"   If there is no Easy Apply button, look for an external 'Apply' link and follow it.\n\n"
-                )
+            if is_linkedin:
+                if has_session:
+                    login_instructions = (
+                        f"You are already logged in to LinkedIn (session cookies loaded).\n"
+                        f"1. Go directly to {url}\n"
+                        f"2. If the page asks you to log in anyway, enter email: {settings.linkedin_email} "
+                        f"and password: {settings.linkedin_password}, then click 'Sign in'.\n"
+                        f"3. Click 'Easy Apply' if available, fill any required fields, and submit.\n"
+                        f"   If there is no Easy Apply button, look for an external 'Apply' link and follow it.\n\n"
+                    )
+                elif settings.linkedin_email and settings.linkedin_password:
+                    login_instructions = (
+                        f"IMPORTANT — LinkedIn requires login before applying.\n"
+                        f"1. First go to https://www.linkedin.com/login\n"
+                        f"2. Enter email: {settings.linkedin_email}\n"
+                        f"3. Enter password: {settings.linkedin_password}\n"
+                        f"4. Click 'Sign in' and wait for the page to load.\n"
+                        f"5. If you see a CAPTCHA on the login page, STOP and report 'CAPTCHA_BLOCKED'.\n"
+                        f"6. After successful login, navigate to {url}\n"
+                        f"7. Click 'Easy Apply' if available, fill any required fields, and submit.\n"
+                        f"   If there is no Easy Apply button, look for an external 'Apply' link and follow it.\n\n"
+                    )
 
             apply_instructions = (
                 f"{'Go to ' + url + ' and f' if not is_linkedin else 'F'}ill the job application form "
@@ -128,6 +139,7 @@ class AgentAdapter(BaseAdapter):
             )
             if SESSION_PATH.exists():
                 bp_kwargs["storage_state"] = str(SESSION_PATH)
+                bp_kwargs["user_data_dir"] = None
                 logger.info("Loading saved LinkedIn session for agent")
 
             browser_profile = BrowserProfile(**bp_kwargs)

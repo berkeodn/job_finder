@@ -9,6 +9,7 @@ yourself). Once you see the LinkedIn feed, press Enter in the terminal to save.
 """
 
 import asyncio
+import json
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -16,6 +17,18 @@ from playwright.async_api import async_playwright
 from src.applicant.stealth import _LAUNCH_ARGS, _STEALTH_JS, _USER_AGENT
 
 SESSION_PATH = Path("linkedin_session.json")
+
+# Fields that CDP/browser-use cannot deserialize
+_COOKIE_STRIP_KEYS = {"partitionKey", "_crHasCrossSiteAncestor"}
+
+
+def _clean_session(path: Path) -> None:
+    """Remove unsupported cookie fields that break CDP storage_state loading."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for cookie in data.get("cookies", []):
+        for key in _COOKIE_STRIP_KEYS:
+            cookie.pop(key, None)
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 
 async def main() -> None:
@@ -57,6 +70,7 @@ async def main() -> None:
                 break
 
         await context.storage_state(path=str(SESSION_PATH))
+        _clean_session(SESSION_PATH)
         print(f"\nSession saved to {SESSION_PATH.resolve()}")
         print("This file contains your LinkedIn cookies. Keep it safe.")
 

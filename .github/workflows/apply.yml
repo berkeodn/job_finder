@@ -23,12 +23,14 @@ jobs:
           pip install -q -r requirements.txt
           playwright install chromium
 
-      - name: Copy LinkedIn session if available
+      - name: Copy and clean LinkedIn session if available
         run: |
           $src = "C:\Users\Berke\Desktop\job_finder\linkedin_session.json"
           if (Test-Path $src) {
             Copy-Item $src -Destination "linkedin_session.json" -Force
-            Write-Host "LinkedIn session loaded"
+            venv\Scripts\Activate.ps1
+            python -c "import json; p='linkedin_session.json'; d=json.loads(open(p,encoding='utf-8').read()); [c.pop('partitionKey',None) or c.pop('_crHasCrossSiteAncestor',None) for c in d.get('cookies',[])]; open(p,'w',encoding='utf-8').write(json.dumps(d))"
+            Write-Host "LinkedIn session loaded and cleaned"
           } else {
             Write-Host "No saved session found - login will be required"
           }
