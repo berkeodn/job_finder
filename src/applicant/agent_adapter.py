@@ -309,11 +309,74 @@ class AgentAdapter(BaseAdapter):
                 logger.info("force_click_element result: %s", result_msg)
                 return ActionResult(extracted_content=result_msg)
 
+            _FIND_INPUT_JS = """(args) => {
+                const label = (args.label || '').trim();
+                const name = (args.name || '').trim();
+                let input;
+                if (label) {
+                    const labels = [...document.querySelectorAll('label')];
+                    const match = labels.find(l => l.textContent.trim().includes(label));
+                    if (match) {
+                        const forId = match.getAttribute('for');
+                        if (forId) input = document.getElementById(forId);
+                        if (!input) input = match.querySelector('input, textarea, select');
+                        if (!input) {
+                            let sib = match.nextElementSibling;
+                            while (sib && !input) {
+                                input = sib.querySelector('input, textarea, select')
+                                    || (sib.matches('input, textarea, select') ? sib : null);
+                                sib = sib.nextElementSibling;
+                            }
+                        }
+                    }
+                    if (!input) input = document.querySelector(
+                        `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
+                    );
+                    if (!input) input = document.querySelector(
+                        `input[placeholder*="${label}"], textarea[placeholder*="${label}"]`
+                    );
+                }
+                if (!input && name) {
+                    input = document.querySelector(
+                        `input[name*="${name}"], textarea[name*="${name}"]`
+                    );
+                }
+                if (!input) return null;
+                input.scrollIntoView({block: 'center'});
+                input.focus();
+                input.click();
+                return {tag: input.tagName, name: input.name || '', id: input.id || ''};
+            }"""
+
+            async def _cdp_type(browser_session, page, text):
+                """Clear field and type text via CDP (trusted events)."""
+                cdp_session = await browser_session.get_or_create_cdp_session()
+                client = cdp_session.cdp_client
+                sid = cdp_session.session_id
+                await page.evaluate("() => document.execCommand('selectAll')")
+                await client.send_raw(
+                    "Input.dispatchKeyEvent",
+                    {"type": "keyDown", "key": "Delete", "code": "Delete",
+                     "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46},
+                    session_id=sid,
+                )
+                await client.send_raw(
+                    "Input.dispatchKeyEvent",
+                    {"type": "keyUp", "key": "Delete", "code": "Delete",
+                     "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46},
+                    session_id=sid,
+                )
+                import asyncio as _aio
+                await _aio.sleep(0.1)
+                await client.send_raw(
+                    "Input.insertText", {"text": text}, session_id=sid,
+                )
+
             @tools.action(description=(
                 "Fill a text input field by its visible label text (e.g. 'Soyadı', 'E-posta'). "
-                "Uses Playwright's fill() which works with React/Workday — no index needed. "
-                "PREFERRED method for ALL text input fields. If label doesn't match, "
-                "pass the input's name attribute instead (e.g. name='legalName--lastName')."
+                "Finds the field by label, clears it, and types the value via CDP (trusted events). "
+                "No element index needed. PREFERRED method for ALL text input fields. "
+                "If label doesn't match, pass the input's name attribute instead."
             ))
             async def fill_text_field(
                 browser_session,
@@ -325,57 +388,15 @@ class AgentAdapter(BaseAdapter):
                 if not page:
                     return ActionResult(extracted_content="No active page found")
                 try:
-                    find_js = """(args) => {
-                        const label = (args.label || '').trim();
-                        const name = (args.name || '').trim();
-                        let input;
-                        if (label) {
-                            const labels = [...document.querySelectorAll('label')];
-                            const match = labels.find(l => l.textContent.trim().includes(label));
-                            if (match) {
-                                const forId = match.getAttribute('for');
-                                if (forId) input = document.getElementById(forId);
-                                if (!input) input = match.querySelector('input, textarea, select');
-                                if (!input) {
-                                    let sib = match.nextElementSibling;
-                                    while (sib && !input) {
-                                        input = sib.querySelector('input, textarea, select') || (sib.matches('input, textarea, select') ? sib : null);
-                                        sib = sib.nextElementSibling;
-                                    }
-                                }
-                            }
-                            if (!input) input = document.querySelector(
-                                `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
-                            );
-                            if (!input) input = document.querySelector(
-                                `input[placeholder*="${label}"], textarea[placeholder*="${label}"]`
-                            );
-                        }
-                        if (!input && name) {
-                            input = document.querySelector(
-                                `input[name*="${name}"], textarea[name*="${name}"]`
-                            );
-                        }
-                        if (!input) return null;
-                        input.scrollIntoView({block: 'center'});
-                        input.focus();
-                        input.click();
-                        return {tag: input.tagName, name: input.name || '', id: input.id || ''};
-                    }"""
-                    info = await page.evaluate(find_js, {"label": label, "name": name})
+                    info = await page.evaluate(_FIND_INPUT_JS, {"label": label, "name": name})
                     if not info:
                         msg = f"Field not found: label='{label}', name='{name}'"
                         logger.warning("fill_text_field: %s", msg)
                         return ActionResult(extracted_content=msg)
 
-                    await page.keyboard.press("Control+a")
-                    await page.keyboard.press("Delete")
-                    await page.keyboard.type(value, delay=30)
+                    await _cdp_type(browser_session, page, value)
 
-                    actual = await page.evaluate("""() => {
-                        const el = document.activeElement;
-                        return el ? el.value : '';
-                    }""")
+                    actual = await page.evaluate("() => document.activeElement ? document.activeElement.value : ''")
                     msg = (
                         f"Filled {info['tag']} (label='{label}', name='{info['name']}') "
                         f"with '{value}' (actual='{actual}')"
@@ -402,47 +423,13 @@ class AgentAdapter(BaseAdapter):
                 if not page:
                     return ActionResult(extracted_content="No active page found")
                 try:
-                    find_js = """(args) => {
-                        const label = (args.label || '').trim();
-                        const name = (args.name || '').trim();
-                        let input;
-                        if (label) {
-                            const labels = [...document.querySelectorAll('label')];
-                            const match = labels.find(l => l.textContent.trim().includes(label));
-                            if (match) {
-                                const forId = match.getAttribute('for');
-                                if (forId) input = document.getElementById(forId);
-                                if (!input) input = match.querySelector('input, textarea');
-                                if (!input) {
-                                    let sib = match.nextElementSibling;
-                                    while (sib && !input) {
-                                        input = sib.querySelector('input, textarea') || (sib.matches('input, textarea') ? sib : null);
-                                        sib = sib.nextElementSibling;
-                                    }
-                                }
-                            }
-                            if (!input) input = document.querySelector(
-                                `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
-                            );
-                        }
-                        if (!input && name) {
-                            input = document.querySelector(`input[name*="${name}"]`);
-                        }
-                        if (!input) return null;
-                        input.scrollIntoView({block: 'center'});
-                        input.focus();
-                        input.click();
-                        return {tag: input.tagName, name: input.name || '', id: input.id || ''};
-                    }"""
-                    info = await page.evaluate(find_js, {"label": label, "name": name})
+                    info = await page.evaluate(_FIND_INPUT_JS, {"label": label, "name": name})
                     if not info:
                         msg = f"autocomplete_select: field not found: label='{label}', name='{name}'"
                         logger.warning(msg)
                         return ActionResult(extracted_content=msg)
 
-                    await page.keyboard.press("Control+a")
-                    await page.keyboard.press("Delete")
-                    await page.keyboard.type(value, delay=80)
+                    await _cdp_type(browser_session, page, value)
 
                     import asyncio as _aio
                     await _aio.sleep(2)
@@ -475,7 +462,14 @@ class AgentAdapter(BaseAdapter):
                     logger.info(msg)
 
                     if result == "NO_SUGGESTIONS":
-                        await page.keyboard.press("Enter")
+                        cdp_s = await browser_session.get_or_create_cdp_session()
+                        for etype in ("keyDown", "keyUp"):
+                            await cdp_s.cdp_client.send_raw(
+                                "Input.dispatchKeyEvent",
+                                {"type": etype, "key": "Enter", "code": "Enter",
+                                 "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13},
+                                session_id=cdp_s.session_id,
+                            )
                         msg += " — pressed Enter as fallback"
 
                     return ActionResult(extracted_content=msg)
