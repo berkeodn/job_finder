@@ -120,32 +120,23 @@ class AgentAdapter(BaseAdapter):
                 f"Do NOT keep retrying the same action if it triggers a login popup — report failure instead. "
                 f"If there are required fields you cannot fill, skip them and note them.\n\n"
                 f"FORM FILLING RULES (CRITICAL):\n"
-                f"- INDICES CHANGE AFTER EVERY ACTION. React/Workday re-renders the DOM after each "
-                f"interaction, so element indices from a previous step are INVALID. "
-                f"ALWAYS use indices from the CURRENT step's screenshot, never from memory.\n"
-                f"- To fill a text field: FIRST click on the field label or the field itself in the "
-                f"current screenshot to focus it. Then in the NEXT step, use input(index=<NUMBER>, "
-                f"text='value', clear=true) with the index from that step's fresh screenshot.\n"
-                f"- Alternatively, after filling a field, press Tab to move focus to the next field, "
-                f"then type into the focused field.\n"
-                f"- Do NOT use find_elements at all — it wastes steps and does NOT return interactive indices. "
-                f"Read index numbers from the screenshot instead.\n"
-                f"- If a field is not visible, scroll down first, then read indices from the new screenshot.\n"
-                f"- AFTER FILLING A FIELD: Do NOT verify it with find_elements or any other check. "
-                f"If the log says 'Typed X into element', trust it and IMMEDIATELY move to the next field. "
-                f"Do NOT re-fill the same field unless the screenshot clearly shows it is empty.\n"
-                f"- For ALL text input fields (name, email, phone, address, etc.), ALWAYS use the "
-                f"built-in 'input' action. Do NOT use set_form_value for visible text inputs — "
-                f"React overwrites DOM-set values on re-render.\n"
+                f"- For ALL text input fields, use fill_text_field(label='Field Label', value='...'). "
+                f"This is the PREFERRED method — it finds fields by label text, works with React/Workday, "
+                f"and does NOT need element indices. Examples:\n"
+                f"  fill_text_field(label='Soyadı', value='Oden')\n"
+                f"  fill_text_field(label='E-posta', value='user@email.com')\n"
+                f"  fill_text_field(name='phoneNumber', value='5551234567')\n"
+                f"- If fill_text_field fails, try the built-in 'input' action with the index from "
+                f"the CURRENT screenshot. INDICES CHANGE AFTER EVERY ACTION on React pages.\n"
+                f"- Do NOT use find_elements or search_page — they waste steps.\n"
+                f"- AFTER FILLING A FIELD: move to the next field immediately. "
+                f"Do NOT verify or re-fill unless the screenshot clearly shows it is empty.\n"
                 f"- For radio buttons/checkboxes that don't respond to normal clicks (common on Workday): "
                 f"use force_click_element(text=\"Hayır\"). Only pass text=, never selector='div'.\n"
+                f"- For dropdowns: click the dropdown button, then click the option.\n"
                 f"- set_form_value is ONLY for hidden inputs or native <select> elements.\n"
                 f"- NEVER repeat the same failing action more than 2 times. "
-                f"Try a different method or SKIP the field.\n"
-                f"- If ALL methods fail for a field after 3 total attempts, SKIP it and move on.\n\n"
-                f"IMPORTANT: Before retrying a field, check the screenshot first — if the field "
-                f"already shows the correct value, move on. If a validation error persists, "
-                f"it may be about a DIFFERENT field. Read all error messages carefully.\n\n"
+                f"Try a different method or SKIP the field.\n\n"
                 f"AUTOCOMPLETE / TYPEAHEAD FIELDS:\n"
                 f"Some fields (city, country, address) require selecting from a suggestion dropdown:\n"
                 f"1. Use the 'input' action to type the value (character by character).\n"
@@ -305,10 +296,56 @@ class AgentAdapter(BaseAdapter):
                 return ActionResult(extracted_content=result_msg)
 
             @tools.action(description=(
+                "Fill a text input field by its visible label text (e.g. 'Soyadı', 'E-posta'). "
+                "Uses Playwright's fill() which works with React/Workday — no index needed. "
+                "PREFERRED method for ALL text input fields. If label doesn't match, "
+                "pass the input's name attribute instead (e.g. name='legalName--lastName')."
+            ))
+            async def fill_text_field(
+                browser_session,
+                label: str = "",
+                name: str = "",
+                value: str = "",
+            ) -> ActionResult:
+                page = await browser_session.get_current_page()
+                if not page:
+                    return ActionResult(extracted_content="No active page found")
+                try:
+                    element = None
+                    if label:
+                        element = page.get_by_label(label, exact=False)
+                        if await element.count() == 0:
+                            element = page.locator(
+                                f"input[aria-label*='{label}'], "
+                                f"textarea[aria-label*='{label}']"
+                            )
+                    if (not element or await element.count() == 0) and name:
+                        element = page.locator(
+                            f"input[name*='{name}'], textarea[name*='{name}']"
+                        )
+                    if not element or await element.count() == 0:
+                        msg = f"Field not found: label='{label}', name='{name}'"
+                        logger.warning("fill_text_field: %s", msg)
+                        return ActionResult(extracted_content=msg)
+                    target = element.first
+                    await target.scroll_into_view_if_needed()
+                    await target.click()
+                    await target.fill(value)
+                    tag = await target.evaluate("el => el.tagName")
+                    actual = await target.evaluate("el => el.value")
+                    msg = f"Filled {tag} (label='{label}', name='{name}') with '{value}' (actual='{actual}')"
+                    logger.info("fill_text_field: %s", msg)
+                    return ActionResult(extracted_content=msg)
+                except Exception as e:
+                    msg = f"fill_text_field error: {e}"
+                    logger.warning(msg)
+                    return ActionResult(extracted_content=msg)
+
+            @tools.action(description=(
                 "Set a form field value using JavaScript. Works for hidden inputs, "
-                "custom dropdowns, and React/Angular-controlled components. "
+                "custom dropdowns, and native <select> elements. "
                 "Provide a CSS selector and the value to set. "
-                "Use this when normal typing or force_click_element don't work."
+                "Do NOT use for visible text inputs — use fill_text_field instead."
             ))
             async def set_form_value(
                 browser_session,
