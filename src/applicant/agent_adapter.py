@@ -6,8 +6,8 @@ import asyncio
 import logging
 from pathlib import Path
 
-MAX_AGENT_STEPS = 50
-AGENT_TIMEOUT_SECONDS = 720
+MAX_AGENT_STEPS = 65
+AGENT_TIMEOUT_SECONDS = 780
 
 from .base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
 from .email_verifier import fetch_linkedin_verification_code
@@ -142,8 +142,14 @@ class AgentAdapter(BaseAdapter):
                 f"- Do NOT use find_elements or search_page — they waste steps.\n"
                 f"- AFTER FILLING A FIELD: move to the next field immediately. "
                 f"Do NOT verify or re-fill unless the screenshot clearly shows it is empty.\n"
-                f"- For radio buttons/checkboxes that don't respond to normal clicks (common on Workday): "
-                f"use force_click_element(text=\"Hayır\"). Only pass text=, never selector='div'.\n"
+                f"- For radio buttons: use force_click_element(text=\"Hayır\"). Only pass text=, never selector='div'.\n"
+                f"- For CHECKBOXES (e.g. Terms & Conditions / 'hüküm ve koşullar'): "
+                f"use force_click_element(text='short unique text from the label'). "
+                f"Keep the text SHORT (first 20-30 chars). Example: force_click_element(text='Evet, hüküm ve koşul'). "
+                f"If force_click_element fails ONCE, immediately use evaluate with JS: "
+                f"document.querySelector('[role=\"checkbox\"]').click() or "
+                f"document.querySelector('input[type=\"checkbox\"]').click(). "
+                f"Do NOT retry force_click_element more than once for checkboxes.\n"
                 f"- For dropdowns: click the dropdown button, then click the option.\n"
                 f"- set_form_value is ONLY for hidden inputs or native <select> elements.\n"
                 f"- NEVER repeat the same failing action more than 2 times. "
@@ -213,12 +219,43 @@ class AgentAdapter(BaseAdapter):
                             e.textContent.trim() === t
                             && e.offsetParent !== null
                         );
+                        if (!el) el = scope.find(e =>
+                            e.innerText && e.innerText.includes(t)
+                            && e.offsetParent !== null
+                        );
+                        if (!el) {
+                            const shorter = t.substring(0, 30);
+                            el = scope.find(e =>
+                                e.textContent.includes(shorter)
+                                && e.offsetParent !== null
+                                && e.children.length === 0
+                            );
+                        }
+                        if (!el) {
+                            const allEls = [...document.querySelectorAll('*')];
+                            const textEl = allEls.find(e =>
+                                e.innerText && e.innerText.includes(t)
+                                && e.offsetParent !== null
+                            );
+                            if (textEl) {
+                                const cb = textEl.closest('label, [role="checkbox"], [role="radio"]');
+                                if (cb) el = cb;
+                                else {
+                                    const parent = textEl.parentElement;
+                                    if (parent) {
+                                        const nearCb = parent.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"]');
+                                        if (nearCb) el = nearCb;
+                                        else el = textEl;
+                                    } else el = textEl;
+                                }
+                            }
+                        }
                     }
                     if (!el && sel && !t) {
                         const matches = document.querySelectorAll(sel);
                         if (matches.length === 1) el = matches[0];
                     }
-                    if (!el) return {error: 'Element not found for text="' + t + '"'};
+                    if (!el) return JSON.stringify({error: 'Element not found for text="' + t + '"'});
 
                     // Walk up to find the clickable radio/checkbox container
                     let target = el;
@@ -238,16 +275,15 @@ class AgentAdapter(BaseAdapter):
                     if (radio) target = radio;
 
                     target.scrollIntoView({block: 'center'});
-                    // Small delay for scroll to settle
                     const rect = target.getBoundingClientRect();
-                    return {
+                    return JSON.stringify({
                         x: Math.round(rect.x + rect.width / 2),
                         y: Math.round(rect.y + rect.height / 2),
                         tag: target.tagName,
                         role: target.getAttribute('role') || 'none',
                         text: t.slice(0, 50),
                         ariaChecked: target.getAttribute('aria-checked')
-                    };
+                    });
                 }"""
                 import json as _json
                 raw = await page.evaluate(find_js, {"selector": selector, "text": text})
