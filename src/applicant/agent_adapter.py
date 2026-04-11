@@ -131,7 +131,6 @@ class AgentAdapter(BaseAdapter):
             )
 
             from browser_use import ActionResult, Tools
-            from browser_use.browser.session import BrowserSession
 
             tools = Tools()
 
@@ -157,7 +156,7 @@ class AgentAdapter(BaseAdapter):
                 "This dispatches real mouse events (mousedown, mouseup, click, change)."
             ))
             async def force_click_element(
-                browser_session: BrowserSession,
+                browser_session,
                 selector: str = "",
                 text: str = "",
             ) -> ActionResult:
@@ -206,7 +205,7 @@ class AgentAdapter(BaseAdapter):
                 "Use this when normal typing or force_click_element don't work."
             ))
             async def set_form_value(
-                browser_session: BrowserSession,
+                browser_session,
                 selector: str,
                 value: str,
             ) -> ActionResult:
