@@ -11,7 +11,7 @@ from src.db.models import Job
 from src.matcher.gemini import score_job
 from src.matcher.profile import is_blacklisted, load_profile, passes_prefilter
 from src.notifier.telegram import send_alert, send_job_notification, send_rejected_notification
-from src.scraper.linkedin import fetch_descriptions, scrape_page
+from src.scraper.linkedin import fetch_descriptions, scrape_all_pages, scrape_page
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,91 +40,79 @@ async def run() -> None:
             logger.info("Found %d un-scored jobs from previous runs", len(retry_jobs))
 
         # ── Stages 1-3: Scrape → Dedup → Pre-filter ────────────
-        # For each search query, paginate until we find enough filtered
-        # jobs or LinkedIn runs out of results (max 10 pages safety cap).
+        # For each search query, scrape ALL available pages using
+        # LinkedIn's seeMoreJobPostings API (infinite scroll).
         from src.scraper.linkedin import RawJob
 
-        MAX_PAGES = 10
         candidates: list[Job] = []
-        target = settings.min_filtered_jobs
 
         for search in profile.searches:
-            if len(candidates) >= target:
-                logger.info("Reached target of %d filtered jobs, stopping", target)
-                break
-
             logger.info("Searching: %s (%s)", search.keywords, search.location)
 
-            for page in range(MAX_PAGES):
-                if len(candidates) >= target:
-                    break
+            raw_jobs = await scrape_all_pages(search)
+            stats["scraped"] += len(raw_jobs)
 
-                raw_jobs = await scrape_page(search, page)
-                if raw_jobs is None:
-                    break
-                stats["scraped"] += len(raw_jobs)
-
-                # Dedup & store
-                new_jobs: list[Job] = []
-                for raw in raw_jobs:
-                    existing = session.query(Job).filter(Job.job_id == raw.job_id).first()
-                    if existing:
-                        continue
-                    job = Job(
-                        job_id=raw.job_id,
-                        title=raw.title,
-                        company=raw.company,
-                        location=raw.location,
-                        url=raw.url,
-                        posted_time=raw.posted_time,
-                    )
-                    session.add(job)
-                    new_jobs.append(job)
-
-                session.commit()
-                stats["new"] += len(new_jobs)
-
-                if not new_jobs:
-                    logger.info("No new jobs on page %d, trying next page", page + 1)
+            # Dedup & store
+            new_jobs: list[Job] = []
+            for raw in raw_jobs:
+                existing = session.query(Job).filter(Job.job_id == raw.job_id).first()
+                if existing:
                     continue
-
-                # Blacklist + title pre-filter
-                title_passed = [
-                    j for j in new_jobs
-                    if not is_blacklisted(j.company, profile)
-                    and passes_prefilter(j.title, "", profile)
-                ]
-                logger.info(
-                    "Page %d: %d new, %d passed title filter",
-                    page + 1, len(new_jobs), len(title_passed),
+                job = Job(
+                    job_id=raw.job_id,
+                    title=raw.title,
+                    company=raw.company,
+                    location=raw.location,
+                    url=raw.url,
+                    posted_time=raw.posted_time,
                 )
+                session.add(job)
+                new_jobs.append(job)
 
-                if not title_passed:
-                    continue
+            session.commit()
+            stats["new"] += len(new_jobs)
 
-                # Fetch descriptions for title survivors
-                raw_for_desc = [
-                    RawJob(
-                        job_id=j.job_id, title=j.title, company=j.company,
-                        location=j.location, url=j.url, posted_time=j.posted_time,
-                    )
-                    for j in title_passed
-                ]
-                detail_results = await fetch_descriptions(raw_for_desc)
-                for job in title_passed:
-                    desc, wtype = detail_results.get(job.job_id, ("", ""))
-                    job.description = desc
-                    job.work_type = wtype
-                session.commit()
+            if not new_jobs:
+                logger.info("No new jobs for query '%s'", search.keywords)
+                continue
 
-                # Full pre-filter (title + description)
-                for job in title_passed:
-                    if passes_prefilter(job.title, job.description, profile):
-                        job.passed_prefilter = True
-                        candidates.append(job)
-                session.commit()
+            # Blacklist + title pre-filter
+            title_passed = [
+                j for j in new_jobs
+                if not is_blacklisted(j.company, profile)
+                and passes_prefilter(j.title, "", profile)
+            ]
+            logger.info(
+                "Query '%s': %d scraped, %d new, %d passed title filter",
+                search.keywords, len(raw_jobs), len(new_jobs), len(title_passed),
+            )
 
-                logger.info("Filtered so far: %d / %d target", len(candidates), target)
+            if not title_passed:
+                continue
+
+            # Fetch descriptions for title survivors
+            raw_for_desc = [
+                RawJob(
+                    job_id=j.job_id, title=j.title, company=j.company,
+                    location=j.location, url=j.url, posted_time=j.posted_time,
+                )
+                for j in title_passed
+            ]
+            detail_results = await fetch_descriptions(raw_for_desc)
+            for job in title_passed:
+                desc, wtype = detail_results.get(job.job_id, ("", ""))
+                job.description = desc
+                job.work_type = wtype
+            session.commit()
+
+            # Full pre-filter (title + description)
+            for job in title_passed:
+                if passes_prefilter(job.title, job.description, profile):
+                    job.passed_prefilter = True
+                    candidates.append(job)
+            session.commit()
+
+            logger.info("Query '%s': %d passed full filter", search.keywords, len(candidates))
 
         stats["prefiltered"] = len(candidates)
         stats["retried"] = len(retry_jobs)
