@@ -10,9 +10,9 @@ from playwright.async_api import Page, async_playwright
 
 from config import settings
 
-from .base import ApplicantProfile, ApplyResult, BaseAdapter, take_screenshot
-from .email_verifier import fetch_linkedin_verification_code
-from .stealth import create_stealth_context
+from ..base import ApplicantProfile, ApplyResult, BaseAdapter, take_screenshot
+from ..browser.email_verifier import fetch_linkedin_verification_code
+from ..browser.stealth import create_stealth_context
 
 logger = logging.getLogger(__name__)
 

@@ -9,9 +9,9 @@ from pathlib import Path
 MAX_AGENT_STEPS = 65
 AGENT_TIMEOUT_SECONDS = 780
 
-from .base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
-from .email_verifier import fetch_linkedin_verification_code
-from .stealth import SESSION_PATH, _LAUNCH_ARGS, _USER_AGENT
+from ..base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
+from ..browser.email_verifier import fetch_linkedin_verification_code
+from ..browser.stealth import SESSION_PATH, _LAUNCH_ARGS, _USER_AGENT
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,34 @@ class AgentAdapter(BaseAdapter):
                 f"with the following information:\n"
             )
 
+            from ..salary.exchange_rates import fetch_live_try_rates
+            from ..salary.salary_convert import compute_equivalents, format_equivalents_hint
+
+            salary_rates_block = ""
+            try:
+                live = await asyncio.to_thread(fetch_live_try_rates)
+                if live:
+                    eq = compute_equivalents(
+                        profile.salary_expectation,
+                        live.try_per_usd,
+                        live.try_per_eur,
+                        live.source,
+                        net_to_gross=settings.salary_net_to_gross_multiplier,
+                    )
+                else:
+                    logger.warning("Live FX unavailable; using config fallback for salary hints")
+                    eq = compute_equivalents(
+                        profile.salary_expectation,
+                        settings.try_usd_rate_fallback,
+                        settings.try_eur_rate_fallback,
+                        "config_fallback",
+                        net_to_gross=settings.salary_net_to_gross_multiplier,
+                    )
+                if eq:
+                    salary_rates_block = f"\n{format_equivalents_hint(eq)}\n"
+            except Exception as e:
+                logger.warning("Salary equivalent computation failed: %s", e)
+
             closed_job_instructions = (
                 f"\nJOB CLOSED / ALREADY APPLIED DETECTION (CRITICAL):\n"
                 f"Check ONLY the VISIBLE page content (what you see in the screenshot). "
@@ -127,9 +155,13 @@ class AgentAdapter(BaseAdapter):
                 f"\nADDRESS FIELDS: Some forms split address into multiple fields. "
                 f"Use the values above exactly. Do NOT assume which fields are dropdowns and which are text — "
                 f"detect the type at runtime (see FIELD TYPE DETECTION below).\n"
-                f"\nSALARY: The salary above is NET. If the form asks for net, use {profile.salary_expectation}. "
-                f"If the form asks for GROSS, multiply by ~1.47 (Turkish tax). "
-                f"If a different currency is requested, convert at approximate current rates.\n"
+                f"\nSALARY: Base amount is {profile.salary_expectation} (your figure is NET/month in TRY).\n"
+                f"{salary_rates_block}"
+                f"- TL / TRY + NET / net / take-home → use the NET line (first line above).\n"
+                f"- TL / TRY + GROSS / brüt / before tax / vergi öncesi → use the APPROX GROSS line (second line; "
+                f"approximate only).\n"
+                f"- USD / EUR → use NET or APPROX GROSS line to match the field (monthly vs annual per label).\n"
+                f"- If the form already states gross in a different currency, follow the label; use our hints as estimates.\n"
                 f"For English proficiency: level is C1. If the field is a dropdown, "
                 f"open it first to see the available options, then pick the closest to C1/Advanced.\n"
                 f"For work authorization: authorized to work in Turkey without sponsorship. "

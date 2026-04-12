@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     imap_email: str = ""  # defaults to linkedin_email if empty
     imap_password: str = ""  # Gmail App Password
 
+    # Fallback only if TCMB + backup FX API both fail (TRY per 1 USD / 1 EUR)
+    try_usd_rate_fallback: float = 40.0
+    try_eur_rate_fallback: float = 43.0
+
+    # Rough net→gross for Turkey when forms ask brüt/gross (exact depends on tax bracket)
+    salary_net_to_gross_multiplier: float = 1.47
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from src.applicant.stealth import _LAUNCH_ARGS, _STEALTH_JS, _USER_AGENT
+from src.applicant.browser.stealth import _LAUNCH_ARGS, _STEALTH_JS, _USER_AGENT
 
 SESSION_PATH = Path("linkedin_session.json")
 

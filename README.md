@@ -132,12 +132,15 @@ job_finder/
 │   ├── notifier/telegram.py          # Telegram bot notifications
 │   ├── applicant/
 │   │   ├── runner.py                 # Apply orchestrator (polls Telegram, picks adapter)
-│   │   ├── agent_adapter.py          # AI agent (browser-use + custom tools)
-│   │   ├── linkedin_adapter.py       # LinkedIn rule-based adapter
-│   │   ├── lever_adapter.py          # Lever rule-based adapter
-│   │   ├── greenhouse_adapter.py     # Greenhouse rule-based adapter
+│   │   ├── base.py                   # Shared types + profile loader
 │   │   ├── telegram_poll.py          # Telegram callback polling
-│   │   └── base.py                   # Shared types + profile loader
+│   │   ├── adapters/                 # Site-specific adapters
+│   │   │   ├── agent_adapter.py      # AI agent (browser-use + custom tools)
+│   │   │   ├── linkedin_adapter.py   # LinkedIn rule-based adapter
+│   │   │   ├── lever_adapter.py      # Lever rule-based adapter
+│   │   │   └── greenhouse_adapter.py # Greenhouse rule-based adapter
+│   │   ├── browser/                  # Stealth Playwright + email verification
+│   │   └── salary/                   # Exchange rates + salary hint text
 │   └── main.py                       # Scrape pipeline orchestrator
 ├── profile.yaml                      # Your profile & search config
 ├── config.py                         # App settings (reads .env)

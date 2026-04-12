@@ -14,11 +14,8 @@ from src.db.database import get_session, init_db
 from src.db.models import Job
 from src.notifier.telegram import send_alert
 
-from .agent_adapter import AgentAdapter
+from .adapters import AgentAdapter, GreenhouseAdapter, LeverAdapter, LinkedInAdapter
 from .base import ApplicantProfile, ApplyResult, load_applicant_profile
-from .greenhouse_adapter import GreenhouseAdapter
-from .lever_adapter import LeverAdapter
-from .linkedin_adapter import LinkedInAdapter
 from .telegram_poll import answer_callback, get_pending_applications
 
 logger = logging.getLogger(__name__)
