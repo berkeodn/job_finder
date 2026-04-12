@@ -630,11 +630,13 @@ class AgentAdapter(BaseAdapter):
                     el.dispatchEvent(new Event('change', {bubbles: true}));
                 }""")
 
-            async def _cdp_type_char_by_char(browser_session, page, text, delay_ms=40):
-                """Clear field and type text character-by-character via CDP.
-                Triggers individual keyDown/keyUp per char — required for
-                autocomplete/typeahead fields that listen to per-keystroke events."""
-                await _cdp_clear_field(browser_session, page)
+            async def _cdp_type_char_by_char(browser_session, page, text, delay_ms=40, clear=True):
+                """Type text character-by-character via CDP insertText.
+                Each char fires a separate insertText command which triggers
+                the browser's native 'input' event — required for React Select,
+                Angular, and other frameworks that filter on per-keystroke input events."""
+                if clear:
+                    await _cdp_clear_field(browser_session, page)
                 cdp_session = await browser_session.get_or_create_cdp_session()
                 client = cdp_session.cdp_client
                 sid = cdp_session.session_id
@@ -642,13 +644,16 @@ class AgentAdapter(BaseAdapter):
                 for ch in text:
                     await client.send_raw(
                         "Input.dispatchKeyEvent",
-                        {"type": "keyDown", "key": ch, "text": ch,
-                         "unmodifiedText": ch},
+                        {"type": "keyDown", "key": ch, "code": "",
+                         "text": ch, "unmodifiedText": ch},
                         session_id=sid,
                     )
                     await client.send_raw(
+                        "Input.insertText", {"text": ch}, session_id=sid,
+                    )
+                    await client.send_raw(
                         "Input.dispatchKeyEvent",
-                        {"type": "keyUp", "key": ch},
+                        {"type": "keyUp", "key": ch, "code": ""},
                         session_id=sid,
                     )
                     if delay_ms > 0:
@@ -849,32 +854,29 @@ class AgentAdapter(BaseAdapter):
                     return 'Selected: ' + pick.textContent.trim().substring(0, 80);
                 }
 
-                const fallbacks = document.querySelectorAll(
-                    '[role="option"], li[tabindex], [role="listbox"] > *, ' +
-                    '[class*="dropdown__option"], [class*="select__option"], ' +
-                    '[class*="dropdown__menu"] > div > div, ' +
-                    '[class*="select__menu"] > div > div, ' +
-                    'mat-option, .el-select-dropdown__item, ' +
-                    '[class*="p-autocomplete-item"], [class*="p-dropdown-item"], ' +
-                    '[class*="v-list-item"], [class*="vs__dropdown-option"], ' +
-                    '[class*="multiselect__option"], .select2-results__option, ' +
-                    '.chosen-results li, [class*="ts-dropdown"] [class*="option"], ' +
-                    '[class*="dropdown"] li, [class*="menu"] li'
+                const dropdownContainers = document.querySelectorAll(
+                    '[role="listbox"], [class*="dropdown__menu"], [class*="select__menu"], ' +
+                    '[class*="dropdown-menu"], [class*="autocomplete-panel"], ' +
+                    '[class*="mat-autocomplete-panel"], [class*="cdk-overlay"], ' +
+                    '[class*="v-menu__content"], [class*="el-select-dropdown"], ' +
+                    '[class*="el-autocomplete-suggestion"], ' +
+                    '[class*="p-autocomplete-panel"], [class*="p-dropdown-panel"], ' +
+                    '[class*="vs__dropdown-menu"], [class*="multiselect__content"], ' +
+                    '[class*="selectize-dropdown"], [class*="select2-results"], ' +
+                    '[class*="chosen-results"], [class*="ts-dropdown"], ' +
+                    '.ui-autocomplete, .tt-menu, .pac-container, ' +
+                    '[class*="headlessui"][role="listbox"]'
                 );
-                for (const fb of fallbacks) {
-                    if (fb.offsetParent === null) continue;
-                    const txt = (fb.textContent || '').toLowerCase().trim();
-                    if (txt && txt.includes(val)) {
-                        fb.scrollIntoView({block: 'center'});
-                        fb.click();
-                        return 'Selected (fallback): ' + fb.textContent.trim().substring(0, 80);
-                    }
-                }
-                if (fallbacks.length > 0) {
-                    const first = [...fallbacks].find(f => f.offsetParent !== null);
-                    if (first) {
-                        first.click();
-                        return 'Selected first visible: ' + first.textContent.trim().substring(0, 80);
+                for (const container of dropdownContainers) {
+                    if (container.offsetParent === null && !container.closest('[role="listbox"]')) continue;
+                    const items = container.querySelectorAll('div, li, span, [role="option"]');
+                    for (const fb of items) {
+                        const txt = (fb.textContent || '').toLowerCase().trim();
+                        if (txt && txt.includes(val) && fb.children.length < 5) {
+                            fb.scrollIntoView({block: 'center'});
+                            fb.click();
+                            return 'Selected (fallback): ' + fb.textContent.trim().substring(0, 80);
+                        }
                     }
                 }
                 return 'NO_SUGGESTIONS';
@@ -955,7 +957,9 @@ class AgentAdapter(BaseAdapter):
                             )
                         await _aio2.sleep(0.15)
 
-                    await _cdp_type_char_by_char(browser_session, page, value, delay_ms=45)
+                    await _cdp_type_char_by_char(
+                        browser_session, page, value, delay_ms=45, clear=False
+                    )
 
                     result = "NO_SUGGESTIONS"
                     for wait in (0.8, 1.2, 1.5):
