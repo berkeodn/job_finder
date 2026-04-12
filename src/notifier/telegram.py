@@ -120,6 +120,7 @@ def send_rejected_notification(
     missing_skills: list[str],
     posted_time: str = "",
     work_type: str = "",
+    job_id: str = "",
 ) -> bool:
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         return False
@@ -129,7 +130,10 @@ def send_rejected_notification(
         posted_time=posted_time, work_type=work_type,
     )
     api_url = TELEGRAM_API.format(token=settings.telegram_bot_token)
-    inline_keyboard = [[{"text": "\U0001f517 View Job", "url": url}]]
+    inline_keyboard = [
+        [{"text": "\u2705 Apply", "callback_data": f"apply:{job_id}"}],
+        [{"text": "\U0001f517 View Job", "url": url}],
+    ]
 
     try:
         resp = httpx.post(

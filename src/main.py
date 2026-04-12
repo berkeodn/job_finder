@@ -322,6 +322,7 @@ def _send_summary(stats: dict, below_threshold: list | None = None) -> None:
                 missing_skills=missing,
                 posted_time=job.posted_time,
                 work_type=job.work_type,
+                job_id=job.job_id,
             )
 
 
