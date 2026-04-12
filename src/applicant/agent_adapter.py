@@ -150,13 +150,17 @@ class AgentAdapter(BaseAdapter):
                 f"If there are required fields you cannot fill, skip them and note them.\n\n"
                 f"FORM FILLING RULES (CRITICAL):\n"
                 f"- For ALL text input fields, use fill_text_field(label='Field Label', value='...'). "
-                f"This is the PREFERRED method — it finds fields by label text, works with React/Workday, "
-                f"and does NOT need element indices. Examples:\n"
-                f"  fill_text_field(label='Soyadı', value='Oden')\n"
-                f"  fill_text_field(label='E-posta', value='user@email.com')\n"
-                f"  fill_text_field(name='phoneNumber', value='5551234567')\n"
-                f"- If fill_text_field fails, try the built-in 'input' action with the index from "
-                f"the CURRENT screenshot. INDICES CHANGE AFTER EVERY ACTION on React pages.\n"
+                f"This is the PREFERRED method — it finds fields by label text and does NOT need element indices.\n"
+                f"- For DROPDOWN / AUTOCOMPLETE fields (City, Country, Skill, Language level, etc.), "
+                f"use autocomplete_select(label='Field Label', value='...'). "
+                f"It types the value and clicks the matching suggestion from the dropdown.\n"
+                f"- ONE-STRIKE RULE: If fill_text_field or autocomplete_select fails ONCE for a field, "
+                f"do NOT retry it for that field. The tool searches by label/name in the DOM — "
+                f"if it fails, retrying will always fail. Instead, IMMEDIATELY switch to:\n"
+                f"  1. Use the 'input' action with the element INDEX from the CURRENT screenshot\n"
+                f"  2. For dropdowns: after typing with 'input', wait 1-2 seconds, "
+                f"then 'click' the matching option from the dropdown in the screenshot\n"
+                f"  INDICES CHANGE AFTER EVERY ACTION on React pages — always use the latest screenshot.\n"
                 f"- Do NOT use find_elements or search_page — they waste steps.\n"
                 f"- AFTER FILLING A FIELD: move to the next field immediately. "
                 f"Do NOT verify or re-fill unless the screenshot clearly shows it is empty.\n"
@@ -168,10 +172,9 @@ class AgentAdapter(BaseAdapter):
                 f"document.querySelector('[role=\"checkbox\"]').click() or "
                 f"document.querySelector('input[type=\"checkbox\"]').click(). "
                 f"Do NOT retry force_click_element more than once for checkboxes.\n"
-                f"- For dropdowns: click the dropdown button, then click the option.\n"
-                f"- set_form_value is ONLY for hidden inputs or native <select> elements.\n"
-                f"- NEVER repeat the same failing action more than 2 times. "
-                f"Try a different method or SKIP the field.\n"
+                f"- For native <select> dropdowns: use set_form_value(selector, value).\n"
+                f"- NEVER repeat the same failing action for the same field. "
+                f"Always switch strategy after 1 failure.\n"
                 f"- VALIDATION ERRORS: When you click 'İleri'/'Next' and see errors, "
                 f"read EACH error message carefully. They may be about DIFFERENT fields. "
                 f"Do NOT assume all errors are about the last field you edited. "
@@ -366,40 +369,87 @@ class AgentAdapter(BaseAdapter):
             _FIND_INPUT_JS = """(args) => {
                 const label = (args.label || '').trim();
                 const name = (args.name || '').trim();
+                const labelClean = label.replace(/\\s*\\*\\s*$/, '').trim();
+                const SELECTORS = 'input, textarea, select, [role="combobox"]';
                 let input;
+
+                function findNearInput(el) {
+                    if (!el) return null;
+                    let found = el.querySelector(SELECTORS);
+                    if (found) return found;
+                    let sib = el.nextElementSibling;
+                    for (let i = 0; i < 5 && sib; i++) {
+                        found = sib.querySelector(SELECTORS)
+                            || (sib.matches(SELECTORS) ? sib : null);
+                        if (found) return found;
+                        sib = sib.nextElementSibling;
+                    }
+                    const parent = el.closest(
+                        '.form-group, [class*="field"], [class*="Field"], ' +
+                        '[data-automation-id], [class*="container"], [class*="wrapper"]'
+                    );
+                    if (parent) {
+                        found = parent.querySelector(SELECTORS);
+                        if (found) return found;
+                    }
+                    return null;
+                }
+
+                function textMatch(text) {
+                    const t = text.trim().replace(/\\s*\\*\\s*$/, '');
+                    return t === label || t === labelClean
+                        || t.includes(label) || t.includes(labelClean);
+                }
+
                 if (label) {
                     const labels = [...document.querySelectorAll('label')];
-                    const match = labels.find(l => l.textContent.trim().includes(label));
+                    const match = labels.find(l => textMatch(l.textContent));
                     if (match) {
                         const forId = match.getAttribute('for');
                         if (forId) input = document.getElementById(forId);
-                        if (!input) input = match.querySelector('input, textarea, select');
-                        if (!input) {
-                            let sib = match.nextElementSibling;
-                            while (sib && !input) {
-                                input = sib.querySelector('input, textarea, select')
-                                    || (sib.matches('input, textarea, select') ? sib : null);
-                                sib = sib.nextElementSibling;
-                            }
-                        }
+                        if (!input) input = findNearInput(match);
+                    }
+                    if (!input) {
+                        const allText = [...document.querySelectorAll(
+                            'span, div, p, h3, h4, strong, legend'
+                        )];
+                        const textEl = allText.find(el =>
+                            textMatch(el.textContent) && el.children.length < 3
+                        );
+                        if (textEl) input = findNearInput(textEl);
                     }
                     if (!input) input = document.querySelector(
-                        `input[aria-label*="${label}"], textarea[aria-label*="${label}"]`
+                        `[aria-label*="${labelClean}"]`
                     );
+                    if (input && !input.matches(SELECTORS)) {
+                        const inner = input.querySelector(SELECTORS);
+                        if (inner) input = inner;
+                    }
                     if (!input) input = document.querySelector(
-                        `input[placeholder*="${label}"], textarea[placeholder*="${label}"]`
+                        `input[placeholder*="${labelClean}"], textarea[placeholder*="${labelClean}"], ` +
+                        `[role="combobox"][placeholder*="${labelClean}"]`
                     );
                 }
                 if (!input && name) {
                     input = document.querySelector(
-                        `input[name*="${name}"], textarea[name*="${name}"]`
+                        `input[name*="${name}"], textarea[name*="${name}"], ` +
+                        `[role="combobox"][name*="${name}"]`
+                    );
+                    if (!input) input = document.querySelector(
+                        `[id*="${name}"][role="combobox"], input[id*="${name}"], textarea[id*="${name}"]`
                     );
                 }
                 if (!input) return JSON.stringify({found: false});
+                const isCombobox = input.getAttribute('role') === 'combobox'
+                    || input.classList.toString().includes('select__input');
                 input.scrollIntoView({block: 'center'});
                 input.focus();
                 input.click();
-                return JSON.stringify({found: true, tag: input.tagName, name: input.name || '', id: input.id || ''});
+                return JSON.stringify({
+                    found: true, tag: input.tagName,
+                    name: input.name || '', id: input.id || '',
+                    isCombobox: isCombobox
+                });
             }"""
 
             async def _cdp_type(browser_session, page, text):
@@ -465,9 +515,11 @@ class AgentAdapter(BaseAdapter):
                     return ActionResult(extracted_content=msg)
 
             @tools.action(description=(
-                "Type into an autocomplete/typeahead field and click the matching suggestion. "
-                "Use for fields like Mahalle/Köy, Şehir, Ülke that require selecting from a dropdown. "
-                "Finds the input by label, types the value, waits for suggestions, and clicks the best match."
+                "Type into an autocomplete/typeahead/dropdown field and click the matching suggestion. "
+                "Works with React Select, Workday, Material UI, and standard HTML dropdowns. "
+                "Use for fields like City, Country, Skill, English level, Notice period — "
+                "any field that shows a dropdown/suggestions after typing. "
+                "Finds the input by label text, types the value, waits for suggestions, and clicks the best match."
             ))
             async def autocomplete_select(
                 browser_session,
@@ -490,32 +542,44 @@ class AgentAdapter(BaseAdapter):
                     await _cdp_type(browser_session, page, value)
 
                     import asyncio as _aio
-                    await _aio.sleep(2)
-
-                    click_js = """(args) => {
-                        const val = args.value.toLowerCase();
-                        const options = document.querySelectorAll(
-                            '[role="option"], [role="listbox"] li, .css-1dimb5e-singleValue, ' +
-                            'ul[role="listbox"] > li, div[data-automation-id*="promptOption"], ' +
-                            '[data-automation-id*="selectOption"]'
-                        );
-                        for (const opt of options) {
-                            if (opt.textContent.toLowerCase().includes(val)) {
-                                opt.scrollIntoView({block: 'center'});
-                                opt.click();
-                                return 'Selected: ' + opt.textContent.trim();
+                    for wait in (1.0, 1.5):
+                        await _aio.sleep(wait)
+                        click_js = """(args) => {
+                            const val = args.value.toLowerCase();
+                            const options = document.querySelectorAll(
+                                '[role="option"], [role="listbox"] li, ' +
+                                'ul[role="listbox"] > li, div[data-automation-id*="promptOption"], ' +
+                                '[data-automation-id*="selectOption"], ' +
+                                '.css-1dimb5e-option, [class*="option"], [class*="Option"]'
+                            );
+                            let best = null;
+                            for (const opt of options) {
+                                const txt = opt.textContent.toLowerCase().trim();
+                                if (txt === val) {
+                                    opt.scrollIntoView({block: 'center'});
+                                    opt.click();
+                                    return 'Selected: ' + opt.textContent.trim();
+                                }
+                                if (!best && txt.includes(val)) best = opt;
                             }
-                        }
-                        const allVisible = document.querySelectorAll(
-                            '[role="option"], li[tabindex], div[data-automation-id] li'
-                        );
-                        if (allVisible.length > 0) {
-                            allVisible[0].click();
-                            return 'Selected first option: ' + allVisible[0].textContent.trim();
-                        }
-                        return 'NO_SUGGESTIONS';
-                    }"""
-                    result = await page.evaluate(click_js, {"value": value})
+                            if (best) {
+                                best.scrollIntoView({block: 'center'});
+                                best.click();
+                                return 'Selected: ' + best.textContent.trim();
+                            }
+                            const allVisible = document.querySelectorAll(
+                                '[role="option"], li[tabindex], div[data-automation-id] li'
+                            );
+                            if (allVisible.length > 0) {
+                                allVisible[0].click();
+                                return 'Selected first option: ' + allVisible[0].textContent.trim();
+                            }
+                            return 'NO_SUGGESTIONS';
+                        }"""
+                        result = await page.evaluate(click_js, {"value": value})
+                        if result != "NO_SUGGESTIONS":
+                            break
+
                     msg = f"autocomplete_select(label='{label}', value='{value}'): {result}"
                     logger.info(msg)
 
