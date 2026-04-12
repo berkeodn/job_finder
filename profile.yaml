@@ -106,9 +106,6 @@ searches:
   - keywords: "analytics engineer"
     location: "Turkey"
     time_posted: "r604800"
-  - keywords: "data"
-    location: "Turkey"
-    time_posted: "r604800"
   - keywords: "ai engineer"
     location: "Turkey"
     time_posted: "r604800"
@@ -132,10 +129,11 @@ must_have_any:
   - data analytics
   - etl
   - data pipeline
-  - data
+  - data platform
   - veri analisti
-  - veri
   - veri bilimci
+  - data warehouse
+  - data infrastructure
 
 deal_breakers:
   - new grad
