@@ -474,18 +474,24 @@ class AgentAdapter(BaseAdapter):
                     return null;
                 }
 
-                function textMatch(text) {
+                function textMatchScore(text) {
                     const t = text.trim().replace(/\\s*\\*\\s*$/, '').replace(/\\s+/g, ' ');
                     const l = label.replace(/\\s+/g, ' ');
                     const lc = labelClean.replace(/\\s+/g, ' ');
-                    return t === l || t === lc
-                        || t.includes(l) || t.includes(lc)
-                        || l.includes(t) || lc.includes(t);
+                    if (t === l || t === lc) return 100;
+                    if (t.includes(l) || t.includes(lc)) return 50;
+                    if (l.includes(t) || lc.includes(t)) return 10;
+                    return 0;
                 }
 
                 if (label) {
                     const labels = [...document.querySelectorAll('label')];
-                    const match = labels.find(l => textMatch(l.textContent));
+                    let bestScore = 0;
+                    let match = null;
+                    for (const lbl of labels) {
+                        const score = textMatchScore(lbl.textContent);
+                        if (score > bestScore) { bestScore = score; match = lbl; }
+                    }
                     if (match) {
                         const forId = match.getAttribute('for');
                         if (forId) input = document.getElementById(forId);
@@ -497,9 +503,13 @@ class AgentAdapter(BaseAdapter):
                             'span, div, p, h3, h4, h5, strong, legend, dt, ' +
                             '[class*="label"], [class*="Label"]'
                         )];
-                        const textEl = allText.find(el =>
-                            textMatch(el.textContent) && el.children.length < 4
-                        );
+                        let bestTextScore = 0;
+                        let textEl = null;
+                        for (const el of allText) {
+                            if (el.children.length >= 4) continue;
+                            const score = textMatchScore(el.textContent);
+                            if (score > bestTextScore) { bestTextScore = score; textEl = el; }
+                        }
                         if (textEl) input = findNearInput(textEl);
                     }
                     if (!input) input = document.querySelector(
@@ -510,7 +520,7 @@ class AgentAdapter(BaseAdapter):
                         for (const el of allLabelled) {
                             const lblId = el.getAttribute('aria-labelledby');
                             const lblEl = lblId && document.getElementById(lblId);
-                            if (lblEl && textMatch(lblEl.textContent)) {
+                            if (lblEl && textMatchScore(lblEl.textContent) > 0) {
                                 input = el; break;
                             }
                         }
