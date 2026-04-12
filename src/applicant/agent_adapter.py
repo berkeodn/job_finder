@@ -653,10 +653,10 @@ class AgentAdapter(BaseAdapter):
                 }""")
 
             async def _cdp_type_char_by_char(browser_session, page, text, delay_ms=40, clear=True):
-                """Type text character-by-character via CDP insertText.
-                Each char fires a separate insertText command which triggers
-                the browser's native 'input' event — required for React Select,
-                Angular, and other frameworks that filter on per-keystroke input events."""
+                """Type text character-by-character via CDP key events.
+                Mimics Playwright's type() method exactly: keyDown(text) → char → keyUp.
+                The keyDown event with `text` param inserts the character (trusted event),
+                the `char` event provides keypress notification for frameworks like React Select."""
                 if clear:
                     await _cdp_clear_field(browser_session, page)
                 cdp_session = await browser_session.get_or_create_cdp_session()
@@ -666,11 +666,15 @@ class AgentAdapter(BaseAdapter):
                 for ch in text:
                     await client.send_raw(
                         "Input.dispatchKeyEvent",
-                        {"type": "keyDown", "key": ch, "code": ""},
+                        {"type": "keyDown", "key": ch, "code": "",
+                         "text": ch, "unmodifiedText": ch},
                         session_id=sid,
                     )
                     await client.send_raw(
-                        "Input.insertText", {"text": ch}, session_id=sid,
+                        "Input.dispatchKeyEvent",
+                        {"type": "char", "key": ch, "code": "",
+                         "text": ch, "unmodifiedText": ch},
+                        session_id=sid,
                     )
                     await client.send_raw(
                         "Input.dispatchKeyEvent",
@@ -1001,7 +1005,7 @@ class AgentAdapter(BaseAdapter):
                     )
 
                     result = "NO_SUGGESTIONS"
-                    for wait in (0.8, 1.2, 1.5):
+                    for wait in (1.0, 1.5, 2.0):
                         await _aio.sleep(wait)
                         result = await page.evaluate(_CLICK_OPTION_JS, {"value": value})
                         if result != "NO_SUGGESTIONS":
@@ -1010,7 +1014,7 @@ class AgentAdapter(BaseAdapter):
                     if result == "NO_SUGGESTIONS":
                         await _cdp_clear_field(browser_session, page)
                         await _cdp_type_char_by_char(browser_session, page, value, delay_ms=60)
-                        for wait2 in (1.0, 1.5):
+                        for wait2 in (1.5, 2.0, 2.5):
                             await _aio.sleep(wait2)
                             result = await page.evaluate(_CLICK_OPTION_JS, {"value": value})
                             if result != "NO_SUGGESTIONS":
