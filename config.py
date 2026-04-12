@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     imap_password: str = ""  # Gmail App Password
 
     # Fallback only if TCMB + backup FX API both fail (TRY per 1 USD / 1 EUR)
-    try_usd_rate_fallback: float = 40.0
-    try_eur_rate_fallback: float = 43.0
+    try_usd_rate_fallback: float = 44.5959
+    try_eur_rate_fallback: float = 52.1683
 
     # Rough net→gross for Turkey when forms ask brüt/gross (exact depends on tax bracket)
     salary_net_to_gross_multiplier: float = 1.47
