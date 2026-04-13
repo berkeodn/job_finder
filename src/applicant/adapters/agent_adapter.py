@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 AGENT_LOOP_MID_RUN_PROMPT = """
 LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat the same failing call.
 - Base every decision on the LATEST screenshot only; element indices change after each step. Never use search_page or find_elements (they mislead).
+- WRONG FIELD: If text went into email instead of another field (e.g. Nationalities), STOP reusing that index. Click the correct question row/control to move focus, then use ONLY the NEW index from the latest element list for that label — never assume email's index equals another field's index.
 - React / custom dropdowns: use force_click_element with the EXACT visible option text (Evet not Yes if the UI shows Evet). If "0 results", clear the field, reopen the list, then pick from what you see.
 - If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
 - Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
@@ -310,6 +311,18 @@ class AgentAdapter(BaseAdapter):
                 f"again and retry with the visible local-language label ONCE before trying other strategies.\n"
                 f"- Element indices from the browser snapshot are ONLY for the standard 'click' action with a "
                 f"numeric index. NEVER pass a raw number as a CSS selector (e.g. '[21917]' is invalid).\n\n"
+
+                # ── INDEX & FOCUS (LONG FORMS / ASHBY / ATS) ──
+                f"INDEX & FOCUS — EACH FIELD HAS ITS OWN INDEX:\n"
+                f"- `input(index=N)` targets exactly ONE element from the CURRENT step's list. "
+                f"Never reuse index N from an earlier step for a different field (e.g. email vs nationalities): "
+                f"after any action, lists renumber — the email index is NOT the nationality index.\n"
+                f"- Before typing, confirm the element for that index matches the intended label in the screenshot "
+                f"(read the text next to the control). If you typed into the wrong field, click the correct field "
+                f"(or its label row) to focus it, then use the NEW index from the latest list — do not repeat "
+                f"input on the wrong index.\n"
+                f"- Scroll the form so the target field is visible; focus can remain in an earlier field until "
+                f"you explicitly click the next one.\n\n"
 
                 # ── GENERAL RULES ──
                 f"AFTER FILLING A FIELD: move to the next field immediately. "
