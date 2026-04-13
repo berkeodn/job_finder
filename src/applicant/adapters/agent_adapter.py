@@ -16,6 +16,27 @@ from .loop_watchdog import ActionLoopWatchdog
 
 logger = logging.getLogger(__name__)
 
+
+def _label_suggests_email(label: str, name: str) -> bool:
+    combined = f"{label} {name}".lower()
+    return any(
+        p in combined for p in ("email", "e-mail", "e-posta", "mail address", "correo")
+    )
+
+
+def _is_masked_email_placeholder(value: str) -> bool:
+    """True if the model passed a redacted placeholder instead of a real address."""
+    t = (value or "").strip()
+    if not t:
+        return True
+    tl = t.lower()
+    if tl in ("***", "***@***", "[redacted]", "redacted", "<email>", "n/a"):
+        return True
+    if "@" not in t and set(t) <= {"*", "."}:
+        return True
+    return False
+
+
 # Appended once per run when ActionLoopDetector.get_nudge_message() is set (browser-use loop nudge).
 AGENT_LOOP_MID_RUN_PROMPT = """
 LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat the same failing call.
@@ -141,6 +162,9 @@ class AgentAdapter(BaseAdapter):
                 f"- First Name: {profile.first_name}\n"
                 f"- Last Name: {profile.last_name}\n"
                 f"- Email: {profile.email}\n"
+                f"  → For ANY email field on the form, use this exact address in fill_text_field/input. "
+                f"Do not type asterisks, 'redacted', or placeholders — LLMs sometimes mask PII in tool "
+                f"calls; the real string above is required for submit.\n"
                 f"- Phone (local, without country code): {profile.phone}\n"
                 f"- LinkedIn: {profile.linkedin_url}\n"
                 f"- Location: {profile.location}\n"
@@ -869,6 +893,15 @@ class AgentAdapter(BaseAdapter):
                 if not page:
                     return ActionResult(extracted_content="No active page found")
                 try:
+                    if (
+                        profile.email
+                        and _label_suggests_email(label, name)
+                        and _is_masked_email_placeholder(value)
+                    ):
+                        logger.info(
+                            "fill_text_field: replacing masked email placeholder with profile email"
+                        )
+                        value = profile.email
                     import json as _json
                     raw = await page.evaluate(_FIND_INPUT_JS, {"label": label, "name": name})
                     info = _json.loads(raw) if isinstance(raw, str) else (raw or {})
