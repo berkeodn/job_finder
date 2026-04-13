@@ -131,7 +131,7 @@ def send_rejected_notification(
     )
     api_url = TELEGRAM_API.format(token=settings.telegram_bot_token)
     inline_keyboard = [
-        [{"text": "\u2705 Apply", "callback_data": f"apply:{job_id}"}],
+        [{"text": "\U0001f4e8 Apply", "callback_data": f"apply:{job_id}"}],
         [{"text": "\U0001f517 View Job", "url": url}],
     ]
 
@@ -177,11 +177,12 @@ def send_job_notification(
     )
     api_url = TELEGRAM_API.format(token=settings.telegram_bot_token)
 
-    inline_keyboard = [[{"text": "\U0001f517 View Job", "url": url}]]
+    inline_keyboard: list[list[dict]] = []
     if job_id:
         inline_keyboard.append(
             [{"text": "\U0001f4e8 Apply", "callback_data": f"apply:{job_id}"}]
         )
+    inline_keyboard.append([{"text": "\U0001f517 View Job", "url": url}])
 
     try:
         resp = httpx.post(
