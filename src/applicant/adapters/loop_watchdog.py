@@ -1,7 +1,7 @@
-"""Detect repetitive agent actions across browser-use steps (any site, any tool).
+"""Local fingerprint tracking for optional hard-stop (pairs with register_should_stop_callback).
 
-- Optional hard-stop via ``should_stop_now()`` (pairs with Agent register_should_stop_callback).
-- ``is_loop_pattern()``: read-only repetitive-behaviour check without mutating stop_reason.
+Mid-run loop prompt (extra ``UserMessage`` when browser-use's loop detector nudges) lives in
+``agent_adapter``; this module does not inject prompts.
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ class ActionLoopWatchdog:
         self._consecutive = 0
         self._last_fp: str | None = None
         self.stop_reason: str | None = None
-        self.recovery_mid_run_injected: bool = False
 
     def record_model_output(self, model_output: Any) -> None:
         """Call from register_new_step_callback after each LLM step."""
@@ -66,18 +65,6 @@ class ActionLoopWatchdog:
         else:
             self._last_fp = fp
             self._consecutive = 1
-
-    def should_inject_mid_run_recovery(self, after_consecutive: int) -> bool:
-        """True once when the same fingerprint repeated **more than** ``after_consecutive`` times.
-
-        Example: ``after_consecutive=2`` → inject starting at the 3rd identical action in a row.
-        """
-        if self.recovery_mid_run_injected:
-            return False
-        return self._consecutive > after_consecutive
-
-    def mark_mid_run_recovery_injected(self) -> None:
-        self.recovery_mid_run_injected = True
 
     def is_loop_pattern(self) -> bool:
         """True if current fingerprints show repetitive behaviour (no side effects)."""

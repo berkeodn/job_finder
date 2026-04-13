@@ -16,14 +16,16 @@ from .loop_watchdog import ActionLoopWatchdog
 
 logger = logging.getLogger(__name__)
 
-# Injected mid-run when the watchdog sees repeated identical tool calls (see loop_watchdog + config).
-AGENT_LOOP_RECOVERY_EXTEND = """
-LOOP RECOVERY — You are repeating the same action without progress.
-Change strategy (do not repeat the same failing action+parameters):
-- Use only text and element indices from the CURRENT screenshot; indices change after every step.
-- If force_click_element(text=...) failed or was repeated, try the exact on-screen label in the page language, or use click with a fresh numeric index from the latest element list.
-- Do not issue the same tool call with identical parameters more than twice; switch tool, target, or scroll the modal first.
-- For radios/dropdowns, match visible labels (e.g. Evet vs Yes) exactly.
+# Appended once per run when ActionLoopDetector.get_nudge_message() is set (browser-use loop nudge).
+AGENT_LOOP_MID_RUN_PROMPT = """
+LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat the same failing call.
+- Base every decision on the LATEST screenshot only; element indices change after each step. Never use search_page or find_elements (they mislead).
+- React / custom dropdowns: use force_click_element with the EXACT visible option text (Evet not Yes if the UI shows Evet). If "0 results", clear the field, reopen the list, then pick from what you see.
+- If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
+- Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
+- Same tool + same parameters: at most twice, then switch tool, target, or scroll. After ~4 attempts on one field, SKIP that field and continue.
+- Submit/Next errors: read ALL messages; fix each named field — not only the last one you touched.
+- If the visible page shows CAPTCHA, Cloudflare "Verify", or "Just a moment...", stop looping and report CAPTCHA_BLOCKED per your instructions.
 """
 
 
@@ -1215,36 +1217,55 @@ class AgentAdapter(BaseAdapter):
             loop_watchdog = wd
 
             agent_holder: list = [None]
+            mid_run_prompt_injected: list = [False]
 
             def _step_cb_factory(watchdog: ActionLoopWatchdog):
                 def _on_agent_step(_browser_state_summary, model_output, _n_steps: int) -> None:
                     if settings.agent_loop_watchdog_enabled:
                         watchdog.record_model_output(model_output)
-                    if not settings.agent_loop_mid_run_inject_enabled:
+                    if not settings.agent_loop_mid_run_prompt_enabled:
+                        return
+                    if mid_run_prompt_injected[0]:
                         return
                     ag = agent_holder[0]
                     if ag is None:
                         return
-                    if not watchdog.should_inject_mid_run_recovery(
-                        settings.agent_loop_mid_run_inject_after_consecutive,
-                    ):
-                        return
-                    watchdog.mark_mid_run_recovery_injected()
                     try:
+                        ag_settings = getattr(ag, "settings", None)
+                        if ag_settings is not None and not getattr(
+                            ag_settings, "loop_detection_enabled", True
+                        ):
+                            return
+                        ld = getattr(getattr(ag, "state", None), "loop_detector", None)
+                        if ld is None:
+                            return
+                        # Same condition browser-use uses in _inject_loop_detection_nudge (prepare_context).
+                        nudge = ld.get_nudge_message()
+                        if not nudge:
+                            return
                         from browser_use.llm.messages import UserMessage
 
                         mm = getattr(ag, "_message_manager", None)
                         if mm is not None and hasattr(mm, "_add_context_message"):
                             mm._add_context_message(
-                                UserMessage(content=AGENT_LOOP_RECOVERY_EXTEND)
+                                UserMessage(content=AGENT_LOOP_MID_RUN_PROMPT)
                             )
+                            mid_run_prompt_injected[0] = True
                             logger.info(
-                                "Mid-run recovery prompt injected "
-                                "(consecutive > %s identical actions)",
-                                settings.agent_loop_mid_run_inject_after_consecutive,
+                                "Mid-run loop prompt injected (browser-use loop nudge: "
+                                "repetition=%s, stagnation=%s)",
+                                getattr(ld, "max_repetition_count", 0),
+                                getattr(ld, "consecutive_stagnant_pages", 0),
+                            )
+                        else:
+                            logger.warning(
+                                "Mid-run loop prompt not injected: no _message_manager._add_context_message "
+                                "(loop nudge was set: repetition=%s, stagnation=%s)",
+                                getattr(ld, "max_repetition_count", 0),
+                                getattr(ld, "consecutive_stagnant_pages", 0),
                             )
                     except Exception as e:
-                        logger.warning("Mid-run recovery inject failed: %s", e)
+                        logger.warning("Mid-run loop prompt inject failed: %s", e)
 
                 return _on_agent_step
 

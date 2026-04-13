@@ -38,20 +38,17 @@ class Settings(BaseSettings):
     max_daily_applications: int = 20
     headless: bool = True
 
-    # browser-use Agent: loop fingerprint tracking + optional hard-stop + mid-run inject
+    # browser-use Agent: local loop fingerprint (hard-stop) + optional mid-run loop prompt
     agent_loop_watchdog_enabled: bool = True
     agent_loop_window_actions: int = 24
     agent_loop_max_identical_in_window: int = 6
     agent_loop_max_consecutive_identical: int = 5
     # If True, register_should_stop_callback stops the run when thresholds hit (aggressive).
-    # If False, rely on library loop nudges + optional mid-run inject below.
+    # If False, rely on browser-use loop_detection nudges + optional mid-run prompt below.
     agent_loop_hard_stop: bool = False
-    # Inject recovery text into the agent context when the same action repeats
-    # more than N times in a row (uses browser_use internal message manager; best-effort).
-    # Env: AGENT_LOOP_MID_RUN_INJECT_ENABLED (replaces AGENT_LOOP_MID_RUN_RECOVERY_ENABLED).
-    agent_loop_mid_run_inject_enabled: bool = True
-    # inject when consecutive > N → e.g. 2 means inject on the 3rd identical action in a row
-    agent_loop_mid_run_inject_after_consecutive: int = 2
+    # When ActionLoopDetector.get_nudge_message() is non-empty (same as browser-use loop nudge),
+    # append our extra UserMessage once per agent run. Env: AGENT_LOOP_MID_RUN_PROMPT_ENABLED
+    agent_loop_mid_run_prompt_enabled: bool = True
 
     # IMAP settings for LinkedIn email verification code
     imap_server: str = "imap.gmail.com"
