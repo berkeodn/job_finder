@@ -12,8 +12,19 @@ AGENT_TIMEOUT_SECONDS = 780
 from ..base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
 from ..browser.email_verifier import fetch_linkedin_verification_code
 from ..browser.stealth import SESSION_PATH, _LAUNCH_ARGS, _USER_AGENT
+from .loop_watchdog import ActionLoopWatchdog
 
 logger = logging.getLogger(__name__)
+
+# Injected mid-run when the watchdog sees repeated identical tool calls (see loop_watchdog + config).
+AGENT_LOOP_RECOVERY_EXTEND = """
+LOOP RECOVERY — You are repeating the same action without progress.
+Change strategy (do not repeat the same failing action+parameters):
+- Use only text and element indices from the CURRENT screenshot; indices change after every step.
+- If force_click_element(text=...) failed or was repeated, try the exact on-screen label in the page language, or use click with a fresh numeric index from the latest element list.
+- Do not issue the same tool call with identical parameters more than twice; switch tool, target, or scroll the modal first.
+- For radios/dropdowns, match visible labels (e.g. Evet vs Yes) exactly.
+"""
 
 
 class AgentAdapter(BaseAdapter):
@@ -1192,7 +1203,62 @@ class AgentAdapter(BaseAdapter):
 
             SCREENSHOT_DIR.mkdir(exist_ok=True)
 
-            agent = Agent(
+            loop_watchdog: ActionLoopWatchdog | None = None
+            result = None
+            final_result = ""
+
+            wd = ActionLoopWatchdog(
+                window_size=settings.agent_loop_window_actions,
+                max_identical_in_window=settings.agent_loop_max_identical_in_window,
+                max_consecutive_identical=settings.agent_loop_max_consecutive_identical,
+            )
+            loop_watchdog = wd
+
+            agent_holder: list = [None]
+
+            def _step_cb_factory(watchdog: ActionLoopWatchdog):
+                def _on_agent_step(_browser_state_summary, model_output, _n_steps: int) -> None:
+                    if settings.agent_loop_watchdog_enabled:
+                        watchdog.record_model_output(model_output)
+                    if not settings.agent_loop_mid_run_inject_enabled:
+                        return
+                    ag = agent_holder[0]
+                    if ag is None:
+                        return
+                    if not watchdog.should_inject_mid_run_recovery(
+                        settings.agent_loop_mid_run_inject_after_consecutive,
+                    ):
+                        return
+                    watchdog.mark_mid_run_recovery_injected()
+                    try:
+                        from browser_use.llm.messages import UserMessage
+
+                        mm = getattr(ag, "_message_manager", None)
+                        if mm is not None and hasattr(mm, "_add_context_message"):
+                            mm._add_context_message(
+                                UserMessage(content=AGENT_LOOP_RECOVERY_EXTEND)
+                            )
+                            logger.info(
+                                "Mid-run recovery prompt injected "
+                                "(consecutive > %s identical actions)",
+                                settings.agent_loop_mid_run_inject_after_consecutive,
+                            )
+                    except Exception as e:
+                        logger.warning("Mid-run recovery inject failed: %s", e)
+
+                return _on_agent_step
+
+            def _should_stop_factory(watchdog: ActionLoopWatchdog):
+                async def _should_stop_loop() -> bool:
+                    if not settings.agent_loop_watchdog_enabled:
+                        return False
+                    if not settings.agent_loop_hard_stop:
+                        return False
+                    return watchdog.should_stop_now()
+
+                return _should_stop_loop
+
+            agent_kwargs: dict = dict(
                 task=task_prompt,
                 llm=llm,
                 browser_profile=browser_profile,
@@ -1201,7 +1267,13 @@ class AgentAdapter(BaseAdapter):
                 save_conversation_path=str(SCREENSHOT_DIR / "agent_conversation.json"),
                 max_steps=MAX_AGENT_STEPS,
                 loop_detection_enabled=True,
+                register_new_step_callback=_step_cb_factory(wd),
             )
+            if settings.agent_loop_hard_stop:
+                agent_kwargs["register_should_stop_callback"] = _should_stop_factory(wd)
+
+            agent = Agent(**agent_kwargs)
+            agent_holder[0] = agent
             result = await asyncio.wait_for(
                 agent.run(), timeout=AGENT_TIMEOUT_SECONDS
             )
@@ -1209,7 +1281,26 @@ class AgentAdapter(BaseAdapter):
             final_result = result.final_result() if hasattr(result, "final_result") else str(result)
             logger.info("Agent completed: %s", final_result)
 
+            if result is None or loop_watchdog is None:
+                return ApplyResult(
+                    success=False,
+                    message="Agent produced no result",
+                    adapter_used=self.name,
+                )
+
             result_text = str(final_result).lower()
+
+            if (
+                settings.agent_loop_watchdog_enabled
+                and settings.agent_loop_hard_stop
+                and loop_watchdog.stop_reason
+                and "application_submitted" not in result_text
+            ):
+                return ApplyResult(
+                    success=False,
+                    message=f"loop_detected:{loop_watchdog.stop_reason}",
+                    adapter_used=self.name,
+                )
 
             if "application_submitted" in result_text:
                 return ApplyResult(
