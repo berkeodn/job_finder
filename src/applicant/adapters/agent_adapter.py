@@ -1312,8 +1312,14 @@ class AgentAdapter(BaseAdapter):
                 agent.run(), timeout=AGENT_TIMEOUT_SECONDS
             )
 
-            final_result = result.final_result() if hasattr(result, "final_result") else str(result)
-            logger.info("Agent completed: %s", final_result)
+            raw_final = (
+                result.final_result()
+                if result is not None and hasattr(result, "final_result")
+                else (str(result) if result is not None else "")
+            )
+            # browser-use may return None when the run stops on LLM 503 / consecutive failures — do not treat as success.
+            final_result_str = ("" if raw_final is None else str(raw_final)).strip()
+            logger.info("Agent completed: %s", raw_final if raw_final is not None else "(no final_result)")
 
             if result is None or loop_watchdog is None:
                 return ApplyResult(
@@ -1322,7 +1328,14 @@ class AgentAdapter(BaseAdapter):
                     adapter_used=self.name,
                 )
 
-            result_text = str(final_result).lower()
+            if not final_result_str:
+                return ApplyResult(
+                    success=False,
+                    message="Agent stopped without a final result (e.g. LLM errors or early abort)",
+                    adapter_used=self.name,
+                )
+
+            result_text = final_result_str.lower()
 
             if (
                 settings.agent_loop_watchdog_enabled
@@ -1339,7 +1352,7 @@ class AgentAdapter(BaseAdapter):
             if "application_submitted" in result_text:
                 return ApplyResult(
                     success=True,
-                    message=str(final_result)[:500],
+                    message=final_result_str[:500],
                     adapter_used=self.name,
                 )
 
@@ -1351,7 +1364,11 @@ class AgentAdapter(BaseAdapter):
                 )
 
             if "job_closed" in result_text:
-                reason = str(final_result).split("JOB_CLOSED:")[-1].strip()[:200] if "JOB_CLOSED:" in str(final_result) else "Job is no longer available"
+                reason = (
+                    final_result_str.split("JOB_CLOSED:")[-1].strip()[:200]
+                    if "JOB_CLOSED:" in final_result_str
+                    else "Job is no longer available"
+                )
                 return ApplyResult(
                     success=False,
                     message=f"job_closed:{reason}",
@@ -1360,14 +1377,27 @@ class AgentAdapter(BaseAdapter):
 
             is_success = not any(
                 kw in result_text
-                for kw in ["error", "failed", "could not", "unable",
-                            "already applied", "already submitted",
-                            "no longer accepting", "not available"]
+                for kw in [
+                    "error",
+                    "failed",
+                    "could not",
+                    "unable",
+                    "already applied",
+                    "already submitted",
+                    "no longer accepting",
+                    "not available",
+                    "503",
+                    "unavailable",
+                    "deadline expired",
+                    "llm error",
+                    "stopping due to",
+                    "consecutive failures",
+                ]
             )
 
             return ApplyResult(
                 success=is_success,
-                message=str(final_result)[:500],
+                message=final_result_str[:500],
                 adapter_used=self.name,
             )
         except asyncio.TimeoutError:
