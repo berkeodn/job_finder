@@ -234,7 +234,7 @@ class AgentAdapter(BaseAdapter):
                 f"- native_select(label=..., value=...): For native HTML <select> elements.\n"
                 f"- set_form_value(selector, value): For hidden inputs, radios, checkboxes, sliders.\n"
                 f"- force_click_element(text=...): For radio buttons, checkboxes, AND dropdown options. "
-                f"Uses CDP trusted events. ONLY pass text= with the exact visible text. "
+                f"Uses CDP trusted events. ONLY pass text= with the exact visible text on screen (any language). "
                 f"Do NOT pass selector=. Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
                 f"- upload_file: For file upload fields.\n\n"
@@ -285,6 +285,18 @@ class AgentAdapter(BaseAdapter):
                 f"- evaluate with querySelectorAll for dropdown options.\n"
                 f"- Retrying the same action more than twice on one field.\n"
                 f"- Using fill_text_field on a field where you saw dropdown suggestions.\n\n"
+
+                # ── VISIBLE TEXT & MULTILINGUAL UI (ALL SITES — CRITICAL) ──
+                f"VISIBLE TEXT & MULTILINGUAL UI (ALL APPLICATION SITES):\n"
+                f"- Question text and answer labels may use DIFFERENT languages (e.g. English question, "
+                f"Turkish options Evet/Hayır, or the opposite). Never assume labels match the question language.\n"
+                f"- For force_click_element(text=...), radio/checkbox/dropdown options, and any text-based click: "
+                f"use the EXACT characters shown on the CURRENT screenshot for THAT control — not a translation "
+                f"you expect. If the screen shows 'Evet', pass text='Evet', not 'Yes'. If it shows 'Yes', pass 'Yes'.\n"
+                f"- If force_click_element fails with 'element not found' for English text, look at the screenshot "
+                f"again and retry with the visible local-language label ONCE before trying other strategies.\n"
+                f"- Element indices from the browser snapshot are ONLY for the standard 'click' action with a "
+                f"numeric index. NEVER pass a raw number as a CSS selector (e.g. '[21917]' is invalid).\n\n"
 
                 # ── GENERAL RULES ──
                 f"AFTER FILLING A FIELD: move to the next field immediately. "
