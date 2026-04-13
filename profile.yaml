@@ -1,38 +1,34 @@
-# ── Personal Info (used by auto-apply) ────────────────────────
+# ── Personal Info ────────────────────────────────────────────
 personal:
-  first_name: "Berke"
-  last_name: "Oden"
-  linkedin_url: "https://www.linkedin.com/in/berkeoden/"
-  location: "Ankara, Turkey"
-  address_line: "Etimesgut"
+  first_name: "Ulus"
+  last_name: "Ozdemir"
+  linkedin_url: "https://www.linkedin.com/in/ulusozdemir/"
+  location: "Turkey"
+  address_line: "Ankara"
   city: "Ankara"
-  postal_code: "06790"
-  district: "Etimesgut"
+  postal_code: ""
+  district: ""
   education: "Bachelor's Degree"
-  university: "Yildiz Technical University"
-  current_company: "Picus Security"
+  university: "Erciyes University"
+  current_company: ""
   nationality: "Turkish"
   gender: "Male"
-  date_of_birth: "25/05/1999"
+  date_of_birth: ""
   military_status: "Completed"
-  work_authorization: "Authorized to work in Turkey. Require visa sponsorship for other countries."
+  work_authorization: "Authorized to work in Turkey"
   notice_period: "2 weeks"
   willing_to_relocate: "Yes"
   work_mode_preference: "Open to remote, hybrid, and onsite"
   hear_about_us: "LinkedIn"
 
-# ── Your Profile ──────────────────────────────────────────────
-# The AI scorer uses `summary` + `skills` to rate each job.
-# The pre-filter uses `must_have_any` and `deal_breakers` for fast rejection.
-
+# ── Profile (CRITICAL FOR MATCHING) ─────────────────────────
 summary: |
-  Data Engineer/Scientist with 4 years of hands-on experience.
-  Currently working as a Data Engineer at Picus Security, building
-  agentic AI workflows, data pipelines on AWS, and LLM-powered systems.
-  Previously worked as Data Engineer at Kb01 (fintech/trading) and
-  Data Scientist at Yapi Kredi Bank (ML models, fraud detection, AutoML).
-  Strong in Python, SQL, AWS, PySpark, FastAPI, and modern data stack.
-  Interested in Data Engineering, Data Science, and AI/ML roles.
+  Data Engineer / Data Scientist with hands-on experience building end-to-end data systems,
+  from real-time data collection and ETL pipelines to machine learning and LLM-based applications.
+  Currently working as the sole data professional at Karsu Tekstil, managing full data lifecycle
+  including data ingestion, transformation, analytics, and AI solutions.
+  Strong in Python, SQL, AWS, Spark, real-time data pipelines, and modern data stack.
+  Focused on scalable, production-ready data platforms and AI-driven systems.
 
 skills:
   - python
@@ -42,41 +38,52 @@ skills:
   - db2
   - pandas
   - numpy
-  - power bi
+  - pyspark
+  - apache spark
+  - aws
+  - docker
+  - etl
+  - elt
+  - data pipeline
+  - data engineering
+  - data modeling
+  - data analysis
+  - data warehouse
+  - data infrastructure
   - grafana
+  - power bi
   - node-red
   - kepserver
   - mqtt
-  - etl
-  - data pipeline
-  - data modeling
-  - data analysis
-  - dashboarding
+  - ssis
   - machine learning
-  - git
-  - langfuse
-  - langgraph
+  - xgboost
+  - lightgbm
+  - catboost
+  - random forest
+  - tensorflow
+  - pytorch
   - langchain
-  - openai api
-  - postman
+  - llm
+  - llm integration
+  - ai agent
+  - git
 
-salary_expectation: "190000 TL net/month"
-english_proficiency: "Professional working proficiency (C1) (Advanced)"
+salary_expectation: "85000 TL net/month"
+english_proficiency: "Advanced"
 
-experience_years: 4
-# Jobs requiring more than this many years are auto-rejected by pre-filter.
-# Regex catches patterns like "7+ years", "10 yıl" etc.
-max_experience_years: 7
+experience_years: 2
+max_experience_years: 6
 
 preferred_roles:
   - data engineer
-  - data analyst
+  - data scientist
+  - ai engineer
+  - machine learning engineer
   - analytics engineer
   - business intelligence
-  - data scientist
 
-# ── Search Queries ────────────────────────────────────────────
-
+# ── Search Queries (GENİŞLETTİM) ────────────────────────────
 searches:
   - keywords: "data engineer"
     location: "Turkey"
@@ -86,11 +93,19 @@ searches:
     location: "Turkey"
     time_posted: "r604800"
 
-  - keywords: "data analyst"
+  - keywords: "ai engineer"
     location: "Turkey"
     time_posted: "r604800"
 
-  - keywords: "veri analisti"
+  - keywords: "machine learning engineer"
+    location: "Turkey"
+    time_posted: "r604800"
+
+  - keywords: "data scientist"
+    location: "Turkey"
+    time_posted: "r604800"
+
+  - keywords: "analytics engineer"
     location: "Turkey"
     time_posted: "r604800"
 
@@ -98,44 +113,30 @@ searches:
     location: "Turkey"
     time_posted: "r604800"
 
-  - keywords: "analytics engineer"
-    location: "Turkey"
-    time_posted: "r604800"
-  - keywords: "ai engineer"
-    location: "Turkey"
-    time_posted: "r604800"
-
-
-# ── Pre-filter Rules ─────────────────────────────────────────
-
+# ── Pre-filter Rules  ─────────────
 must_have_any:
   - data engineer
   - veri mühendisi
-  - veri mühendisliği
-  - data analyst
-  - veri analisti
-  - business intelligence
-  - analytics engineer
-  - ai engineer
-  - data analytics
-  - etl
   - data pipeline
+  - etl
   - data platform
-  - veri analisti
-  - veri bilimci
   - data warehouse
+  - big data
+  - spark
+  - pyspark
+  - machine learning
+  - ai engineer
+  - data scientist
+  - analytics engineer
   - data infrastructure
 
 deal_breakers:
-  - new grad
-  - yeni mezun
-  - principal
+  - senior principal
   - staff engineer
   - director
   - vp of
   - head of
 
-# ── Company Blacklist ─────────────────────────────────────────
-# Jobs from these companies are silently skipped (substring match).
+# ── Company Blacklist ────────────────────────────────────────
 company_blacklist:
   - turing
