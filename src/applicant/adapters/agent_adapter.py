@@ -42,10 +42,12 @@ AGENT_LOOP_MID_RUN_PROMPT = """
 LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat the same failing call.
 - Base every decision on the LATEST screenshot only; element indices change after each step. Never use search_page or find_elements (they mislead).
 - WRONG FIELD: If text went into email instead of another field (e.g. Nationalities), STOP reusing that index. Click the correct question row/control to move focus, then use ONLY the NEW index from the latest element list for that label — never assume email's index equals another field's index.
-- React / custom dropdowns: use force_click_element with the EXACT visible option text (Evet not Yes if the UI shows Evet). If "0 results", clear the field, reopen the list, then pick from what you see.
+- React / custom dropdowns: use force_click_element with the EXACT visible option text (Evet not Yes if the UI shows Evet). Nationalities-style fields may hide typed text but still filter the list — select from the list, do not re-type the same keyword.
+- If "0 results", clear the field, reopen the list, then pick from what you see.
 - If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
 - Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
 - Same tool + same parameters: at most twice, then switch tool, target, or scroll. After ~4 attempts on one field, SKIP that field and continue.
+- Intl phone: pick country (+90 etc.) first, then digits in the number box; placeholder/example emails must be cleared and replaced with the real address.
 - Submit/Next errors: read ALL messages; fix each named field — not only the last one you touched.
 - If the visible page shows CAPTCHA, Cloudflare "Verify", or "Just a moment...", stop looping and report CAPTCHA_BLOCKED per your instructions.
 """
@@ -283,8 +285,12 @@ class AgentAdapter(BaseAdapter):
                 f"    Step 1: Click the input field to focus it.\n"
                 f"    Step 2: Use 'input' action with clear=True to type the value.\n"
                 f"    Step 3: Check the screenshot.\n"
-                f"      → Suggestions appeared? Use force_click_element(text='exact option text') to select. DONE.\n"
-                f"      → NO suggestions? This is plain text. Value is set. MOVE ON.\n"
+                f"      → Suggestions or a FILTERED list appeared (below the field)? "
+                f"Use force_click_element(text='exact option text') or click(index=...) on that row. DONE.\n"
+                f"      → HIDDEN FILTER TEXT: On some ATS fields (e.g. Nationalities, multi-select), typed "
+                f"characters do NOT show in the box, but the dropdown list STILL changes (e.g. type 'turk' → "
+                f"'Turkish' appears in the list). That is SUCCESS — do not retry typing; pick the option from the list.\n"
+                f"      → NO list change at all and no suggestions? If it is clearly plain text elsewhere, MOVE ON.\n"
                 f"  APPROACH B — You do NOT know the options (e.g. 'English level', 'Notice period', "
                 f"or any dropdown where you cannot guess the exact option text):\n"
                 f"    Step 1: Click the input field to focus/open the dropdown.\n"
@@ -305,8 +311,9 @@ class AgentAdapter(BaseAdapter):
                 f"Every field gets a MAXIMUM of 4 total actions. After 4 actions on the SAME field, SKIP it.\n"
                 f"Escalation strategy:\n"
                 f"  A) fill_text_field fails → try 'input' once → still fails → SKIP.\n"
-                f"  B) 'input' typed, NO suggestions appeared → it is plain text, value is set. MOVE ON. "
-                f"Do NOT retry 'input' hoping suggestions will appear.\n"
+                f"  B) 'input' typed, box looks empty BUT the dropdown list updated → filter worked; "
+                f"click the matching option (force_click_element / click). If truly NO list change and no "
+                f"suggestions anywhere, treat as plain text only then MOVE ON.\n"
                 f"  C) 'input' typed, suggestions appeared, force_click_element failed → retry ONCE → "
                 f"still fails → SKIP.\n"
                 f"  D) Typed text returns '0 results' → clear field, click to open dropdown, "
@@ -334,7 +341,9 @@ class AgentAdapter(BaseAdapter):
                 f"- If force_click_element fails with 'element not found' for English text, look at the screenshot "
                 f"again and retry with the visible local-language label ONCE before trying other strategies.\n"
                 f"- Element indices from the browser snapshot are ONLY for the standard 'click' action with a "
-                f"numeric index. NEVER pass a raw number as a CSS selector (e.g. '[21917]' is invalid).\n\n"
+                f"numeric index. NEVER pass a raw number as a CSS selector (e.g. '[21917]' is invalid).\n"
+                f"- If you pass selector= to force_click_element (rare), it MUST be valid CSS: attribute selectors "
+                f"need quoted values (e.g. [level=\"1\"]), not bare [level=1]. Prefer text= only and omit selector.\n\n"
 
                 # ── INDEX & FOCUS (LONG FORMS / ASHBY / ATS) ──
                 f"INDEX & FOCUS — EACH FIELD HAS ITS OWN INDEX:\n"
@@ -347,6 +356,22 @@ class AgentAdapter(BaseAdapter):
                 f"input on the wrong index.\n"
                 f"- Scroll the form so the target field is visible; focus can remain in an earlier field until "
                 f"you explicitly click the next one.\n\n"
+
+                # ── COMPOSITE FIELDS (INTL PHONE / PLACEHOLDER EMAIL / ATS DROPDOWNS) ──
+                f"COMPOSITE FIELDS (Careers-page, Manatal-style ATS, intl-tel-input, etc.):\n"
+                f"- Phone with country flag/code on the LEFT: this is NOT one simple text box. "
+                f"First click the country/flag control and select the correct country (e.g. Turkey +90). "
+                f"Then type ONLY the national digits into the phone number area (no repeated country prefix). "
+                f"If fill_text_field fails or validation complains, click the number sub-field from the "
+                f"latest element list and use input(index=...) on that control — not the flag row alone.\n"
+                f"- Email field showing example.com, olivia@..., or any obvious sample/placeholder: "
+                f"it is NOT a valid application email. Clear the field completely (select all + delete or "
+                f"clear=True), then enter the real profile email.\n"
+                f"- Nationalities / languages / multi-select search boxes: open the control (click), type a "
+                f"short filter (e.g. 'turk' for Turkish). The control may show NO visible text while typing — "
+                f"that is normal; watch the list UNDER the field: if options change, your filter worked. "
+                f"Then pick the row (force_click_element(text=...) or click(index=...)). "
+                f"Never conclude 'typing failed' just because the input looks empty.\n\n"
 
                 # ── GENERAL RULES ──
                 f"AFTER FILLING A FIELD: move to the next field immediately. "
@@ -426,9 +451,17 @@ class AgentAdapter(BaseAdapter):
 
                         // --- PHASE 2: scoped selector search ---
                         if (!el) {
-                            const scope = sel
-                                ? [...document.querySelectorAll(sel)]
-                                : [...document.querySelectorAll('*')];
+                            let scopeNodes;
+                            if (sel) {
+                                try {
+                                    scopeNodes = [...document.querySelectorAll(sel)];
+                                } catch (e) {
+                                    scopeNodes = [...document.querySelectorAll('*')];
+                                }
+                            } else {
+                                scopeNodes = [...document.querySelectorAll('*')];
+                            }
+                            const scope = scopeNodes;
                             el = scope.find(e =>
                                 e.textContent.trim() === t
                                 && e.offsetParent !== null
@@ -481,7 +514,12 @@ class AgentAdapter(BaseAdapter):
                         }
                     }
                     if (!el && sel && !t) {
-                        const matches = document.querySelectorAll(sel);
+                        let matches;
+                        try {
+                            matches = document.querySelectorAll(sel);
+                        } catch (e) {
+                            matches = [];
+                        }
                         if (matches.length === 1) el = matches[0];
                     }
                     if (!el) return JSON.stringify({error: 'Element not found for text="' + t + '"'});
@@ -959,19 +997,32 @@ class AgentAdapter(BaseAdapter):
                     else:
                         await _cdp_type(browser_session, page, value)
 
-                    actual = await page.evaluate("""() => {
-                        const el = document.activeElement;
+                    _fid = (info.get("id") or "").strip()
+                    actual = await page.evaluate(
+                        """(args) => {
+                        const id = args.id || '';
+                        let el = id ? document.getElementById(id) : null;
+                        if (!el) el = document.activeElement;
                         if (!el) return '';
-                        const val = el.value !== undefined ? el.value : (el.textContent || '');
+                        let val = '';
+                        if (el.value !== undefined && el.value !== null) {
+                            val = String(el.value);
+                        } else {
+                            val = (el.textContent || '');
+                        }
+                        val = val.trim();
                         el.dispatchEvent(new Event('input', {bubbles: true}));
                         el.dispatchEvent(new Event('change', {bubbles: true}));
                         el.dispatchEvent(new Event('blur', {bubbles: true}));
                         el.dispatchEvent(new FocusEvent('focusout', {bubbles: true}));
                         return val;
-                    }""")
+                    }""",
+                        {"id": _fid},
+                    )
+                    _disp = str(actual)[:80] if str(actual).strip() else "(empty)"
                     msg = (
                         f"Filled {info.get('tag','')} (label='{label}', name='{info.get('name','')}') "
-                        f"with '{value}' (actual='{str(actual)[:80]}')"
+                        f"with '{value}' (actual='{_disp}')"
                     )
                     logger.info("fill_text_field: %s", msg)
                     return ActionResult(extracted_content=msg)
