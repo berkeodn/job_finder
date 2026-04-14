@@ -46,14 +46,15 @@ jobs:
             echo "No local DB yet"
           fi
 
-      - name: Download latest DB from scrape
+      # Base DB: newest jobs-db from scrape or prior ingest (not scrape-only, or approved rows are lost)
+      - name: Download latest jobs.db artifact
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
           path: .
           search_artifacts: true
+          workflow_search: true
           if_no_artifact_found: warn
-          workflow: scrape.yml
 
       - name: Restore apply statuses and normalize DB
         run: |

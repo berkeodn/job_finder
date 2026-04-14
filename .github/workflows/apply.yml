@@ -58,14 +58,15 @@ jobs:
             Write-Host "No local DB yet"
           }
 
-      - name: Download latest DB from scrape
+      # Latest jobs-db from any workflow (telegram-ingest has apply_status=approved; scrape alone does not)
+      - name: Download latest jobs.db artifact
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
           path: .
           search_artifacts: true
+          workflow_search: true
           if_no_artifact_found: warn
-          workflow: scrape.yml
 
       - name: Restore apply statuses and normalize DB
         run: |

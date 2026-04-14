@@ -157,10 +157,17 @@ def answer_callback(callback_query_id: str, text: str) -> None:
         return
     base = TELEGRAM_API.format(token=settings.telegram_bot_token)
     try:
-        httpx.post(
+        r = httpx.post(
             f"{base}/answerCallbackQuery",
             json={"callback_query_id": callback_query_id, "text": text},
             timeout=10,
         )
+        if r.status_code != 200:
+            # Common: 400 if already answered or query expired (duplicate ingest / old click)
+            logger.warning(
+                "answerCallbackQuery HTTP %s: %s",
+                r.status_code,
+                (r.text or "")[:500],
+            )
     except Exception as e:
         logger.error("Error answering callback: %s", e)
