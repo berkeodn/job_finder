@@ -278,6 +278,16 @@ class AgentAdapter(BaseAdapter):
                 f"Do NOT pass selector=. Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
                 f"- upload_file: For file upload fields.\n\n"
+                f"LINKEDIN EASY APPLY — LOCATION / SCHOOL TYPEAHEAD (CRITICAL):\n"
+                f"- 'Location (city)', school name, and similar fields are usually comboboxes (role=combobox), "
+                f"NOT plain text. fill_text_field will refuse them — use: type a few letters with 'input', wait "
+                f"for the list, then click the correct row.\n"
+                f"- After suggestions appear, PREFERRED order: (1) click(index=...) on the [role=option] line "
+                f"that matches the city/school (see browser list — this is reliable on LinkedIn). "
+                f"(2) force_click_element(text='exact line as shown', e.g. 'Ankara, Türkiye'). "
+                f"(3) If the UI uses a native <select> for email, use select_dropdown.\n"
+                f"- Do not type the full city string 10+ times: if the list is visible, pick by index or "
+                f"force_click once with exact screenshot text (watch Turkish characters: Türkiye vs Turkiye).\n\n"
 
                 # ── DROPDOWN STEP-BY-STEP ──
                 f"DROPDOWN FIELDS — STEP-BY-STEP:\n"
@@ -484,6 +494,27 @@ class AgentAdapter(BaseAdapter):
                                     && e.children.length === 0
                                 );
                             }
+                        }
+
+                        // --- PHASE 2.5: listbox/menu options (LinkedIn Easy Apply: options often have child nodes) ---
+                        if (!el && t) {
+                            const norm = (s) => {
+                                try {
+                                    return (s || "").replace(/\s+/g, " ").trim()
+                                        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+                                        .toLowerCase();
+                                } catch (e) {
+                                    return (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                }
+                            };
+                            const nt = norm(t);
+                            const opts = [...document.querySelectorAll(
+                                '[role="option"], [role="menuitemcheckbox"], [role="menuitem"]'
+                            )].filter((o) => o.offsetParent !== null);
+                            const txt = (o) => (o.innerText || o.textContent || "");
+                            el = opts.find((o) => norm(txt(o)) === nt)
+                                || opts.find((o) => norm(txt(o)).includes(nt) && nt.length >= 4)
+                                || opts.find((o) => nt.includes(norm(txt(o)).slice(0, 24)) && norm(txt(o)).length >= 6);
                         }
 
                         // --- PHASE 3: broad fallback (leaf elements first) ---
@@ -918,7 +949,8 @@ class AgentAdapter(BaseAdapter):
                 "Finds the field by label, clears it, and types the value via CDP (trusted events). "
                 "Works with plain inputs, textareas, contenteditable, date/number inputs, "
                 "React, Angular, Vue, Svelte, and Workday fields. "
-                "No element index needed. PREFERRED method for ALL text input fields. "
+                "No element index needed. PREFERRED for plain text inputs. "
+                "Refuses combobox/autocomplete fields — use input + click option instead. "
                 "If label doesn't match, pass the input's name attribute instead."
             ))
             async def fill_text_field(
@@ -945,6 +977,27 @@ class AgentAdapter(BaseAdapter):
                     info = _json.loads(raw) if isinstance(raw, str) else (raw or {})
                     if not info.get("found"):
                         msg = f"Field not found: label='{label}', name='{name}'"
+                        logger.warning("fill_text_field: %s", msg)
+                        return ActionResult(extracted_content=msg)
+
+                    if info.get("isCombobox"):
+                        msg = (
+                            "This field is a combobox/autocomplete (LinkedIn city, school, etc.). "
+                            "Do NOT use fill_text_field. Instead: (1) focus the field; (2) use the "
+                            "'input' action to type a short search string; (3) when suggestions appear, "
+                            "use click(index=N) on the matching [role=option] row from the element list, "
+                            "OR force_click_element with the EXACT visible line text. "
+                            "If force_click_element fails twice, always use click(index) on the option."
+                        )
+                        logger.info("fill_text_field: rejected combobox label=%r", label)
+                        return ActionResult(extracted_content=msg)
+
+                    input_type_early = (info.get("type") or "").lower()
+                    if input_type_early in ("checkbox", "radio"):
+                        msg = (
+                            f"Resolved control is type={input_type_early}, not a text field. "
+                            "Use click or force_click_element on the visible label/option."
+                        )
                         logger.warning("fill_text_field: %s", msg)
                         return ActionResult(extracted_content=msg)
 
