@@ -287,7 +287,9 @@ class AgentAdapter(BaseAdapter):
                 f"(2) force_click_element(text='exact line as shown', e.g. 'Ankara, Türkiye'). "
                 f"(3) If the UI uses a native <select> for email, use select_dropdown.\n"
                 f"- Do not type the full city string 10+ times: if the list is visible, pick by index or "
-                f"force_click once with exact screenshot text (watch Turkish characters: Türkiye vs Turkiye).\n\n"
+                f"force_click once with exact screenshot text (watch Turkish characters: Türkiye vs Turkiye).\n"
+                f"- The suggestion list is often inside Shadow DOM — if force_click_element says not found while "
+                f"the list is clearly visible, use click(index=...) on the first matching option line immediately.\n\n"
 
                 # ── DROPDOWN STEP-BY-STEP ──
                 f"DROPDOWN FIELDS — STEP-BY-STEP:\n"
@@ -432,6 +434,34 @@ class AgentAdapter(BaseAdapter):
                     const t = (args.text || '').trim();
                     const sel = (args.selector || '').trim();
 
+                    // LinkedIn / React typeaheads often render suggestions inside open Shadow DOM.
+                    // document.querySelectorAll does not pierce shadow roots — this does.
+                    const deepQuerySelectorAll = (selectorsCsv) => {
+                        const sels = selectorsCsv.split(",").map((s) => s.trim()).filter(Boolean);
+                        const seen = new Set();
+                        const out = [];
+                        const addFrom = (root) => {
+                            if (!root || !root.querySelectorAll) return;
+                            for (const oneSel of sels) {
+                                try {
+                                    root.querySelectorAll(oneSel).forEach((n) => {
+                                        if (!seen.has(n)) {
+                                            seen.add(n);
+                                            out.push(n);
+                                        }
+                                    });
+                                } catch (e) { /* invalid sel */ }
+                            }
+                            const desc = root.querySelectorAll("*");
+                            for (let i = 0; i < desc.length; i++) {
+                                const n = desc[i];
+                                if (n.shadowRoot) addFrom(n.shadowRoot);
+                            }
+                        };
+                        addFrom(document);
+                        return out;
+                    };
+
                     if (t) {
                         // --- PHASE 1: label-based search (best for radios/checkboxes) ---
                         const labels = [...document.querySelectorAll('label')];
@@ -496,25 +526,60 @@ class AgentAdapter(BaseAdapter):
                             }
                         }
 
-                        // --- PHASE 2.5: listbox/menu options (LinkedIn Easy Apply: options often have child nodes) ---
+                        // --- PHASE 2.5: listbox/menu options (LinkedIn Easy Apply) ---
+                        // Fixed-position dropdowns often have offsetParent === null — do NOT use offsetParent here.
                         if (!el && t) {
-                            const norm = (s) => {
-                                try {
-                                    return (s || "").replace(/\s+/g, " ").trim()
-                                        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-                                        .toLowerCase();
-                                } catch (e) {
-                                    return (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+                            const trFold = (s) => {
+                                let x = (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+                                const map = {
+                                    "ı": "i", "İ": "i", "i̇": "i",
+                                    "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c",
+                                    "â": "a", "î": "i", "û": "u",
+                                };
+                                for (const [k, v] of Object.entries(map)) {
+                                    x = x.split(k).join(v);
                                 }
+                                try {
+                                    x = x.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                                } catch (e) { /* ignore */ }
+                                return x;
                             };
-                            const nt = norm(t);
-                            const opts = [...document.querySelectorAll(
-                                '[role="option"], [role="menuitemcheckbox"], [role="menuitem"]'
-                            )].filter((o) => o.offsetParent !== null);
+                            const optVisible = (o) => {
+                                const r = o.getBoundingClientRect();
+                                const st = getComputedStyle(o);
+                                return r.width >= 1 && r.height >= 1
+                                    && st.visibility !== "hidden"
+                                    && st.display !== "none"
+                                    && parseFloat(st.opacity || "1") > 0.05;
+                            };
                             const txt = (o) => (o.innerText || o.textContent || "");
-                            el = opts.find((o) => norm(txt(o)) === nt)
-                                || opts.find((o) => norm(txt(o)).includes(nt) && nt.length >= 4)
-                                || opts.find((o) => nt.includes(norm(txt(o)).slice(0, 24)) && norm(txt(o)).length >= 6);
+                            const optSel = [
+                                '[role="option"]',
+                                '[role="menuitemcheckbox"]',
+                                '[role="menuitem"]',
+                                '[id^="basic-result-"]',
+                                'li[role="presentation"]',
+                                '[class*="search-typeahead-v2"] [role="option"]',
+                            ].join(", ");
+                            const opts = deepQuerySelectorAll(optSel).filter(optVisible);
+                            const nt = trFold(t);
+                            const parts = nt.split(",").map((p) => p.trim()).filter(Boolean);
+                            const scoreOpt = (o) => {
+                                const s = trFold(txt(o));
+                                if (s === nt) return 100;
+                                if (s.includes(nt) && nt.length >= 4) return 80;
+                                if (parts.length >= 2
+                                    && parts.every((p) => p.length >= 2 && s.includes(p))) return 70;
+                                if (parts.length && parts[0].length >= 3 && s.includes(parts[0])) return 50;
+                                return 0;
+                            };
+                            let best = null;
+                            let bestScore = 0;
+                            for (const o of opts) {
+                                const sc = scoreOpt(o);
+                                if (sc > bestScore) { bestScore = sc; best = o; }
+                            }
+                            if (bestScore >= 50) el = best;
                         }
 
                         // --- PHASE 3: broad fallback (leaf elements first) ---
