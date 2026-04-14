@@ -1,0 +1,76 @@
+# Drains Telegram apply:* callbacks -> jobs.db (apply_status=approved). No browser.
+# GitHub-hosted: runs while your PC is off (public repo = unlimited Actions minutes).
+
+name: Telegram Apply Ingest
+
+on:
+  schedule:
+    - cron: "*/3 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache virtualenv (.venv)
+        uses: actions/cache@v4
+        id: cache-venv
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('requirements.txt') }}
+
+      - name: Create venv and install dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -q --upgrade pip
+          .venv/bin/pip install -q -r requirements.txt
+
+      - name: Use venv on PATH
+        run: echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
+
+      - name: Backup local DB apply statuses
+        run: |
+          if [ -f jobs.db ]; then
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); import json; open('_apply_backup.json','w').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print(f'Backed up {len(rows)} apply statuses'); s.close()"
+          else
+            echo "No local DB yet"
+          fi
+
+      - name: Download latest DB from scrape
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: jobs-db
+          path: .
+          search_artifacts: true
+          if_no_artifact_found: warn
+          workflow: scrape.yml
+
+      - name: Restore apply statuses and normalize DB
+        run: |
+          python -c "import json, os; from datetime import datetime; from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); f='_apply_backup.json'; rows = json.loads(open(f).read()) if os.path.exists(f) else []; restored=0; [setattr(j, 'apply_status', r['st'] or 'not_applied') or (setattr(j, 'applied_at', datetime.fromisoformat(r['at'])) if r['at'] and r['at']!='None' else None) for r in rows if (j := s.query(Job).filter(Job.job_id == r['jid']).first())]; fixed = s.query(Job).filter((Job.apply_status == '') | (Job.apply_status == None)).update({Job.apply_status: 'not_applied'}); s.commit(); print(f'Restored {len(rows)} statuses, fixed {fixed} empty statuses'); s.close()"
+
+      - name: Run Telegram ingest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONIOENCODING: "utf-8"
+        run: python -m src.applicant.telegram_ingest
+
+      - name: Upload DB artifact
+        if: always() && hashFiles('jobs.db') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-db
+          path: jobs.db
+          retention-days: 90
+          overwrite: true

@@ -1,4 +1,4 @@
-"""Orchestrator: poll Telegram -> pick adapter -> apply -> report result."""
+"""Orchestrator: apply to jobs marked approved in DB (Telegram ingest runs separately)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from src.notifier.telegram import send_alert
 
 from .adapters import AgentAdapter, GreenhouseAdapter, LeverAdapter, LinkedInAdapter
 from .base import ApplicantProfile, ApplyResult, load_applicant_profile
-from .telegram_poll import answer_callback, get_pending_applications
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +105,7 @@ async def _apply_to_job(
 
 
 async def run_applicant() -> None:
-    """Main entry point: poll for approved applications and process them."""
+    """Process jobs with apply_status=approved (set by telegram-ingest or test workflow)."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -120,27 +119,14 @@ async def run_applicant() -> None:
     profile = load_applicant_profile()
     session = get_session()
 
-    pending = get_pending_applications()
-
-    # Also pick up jobs already marked 'approved' in the DB (e.g. reset for testing)
-    db_approved = (
+    pending_jobs = (
         session.query(Job)
         .filter(Job.apply_status == "approved")
         .all()
     )
-    telegram_ids = {p["job_id"] for p in pending}
-    for job in db_approved:
-        if job.job_id not in telegram_ids:
-            pending.append({"job_id": job.job_id, "callback_query_id": None})
 
-    # Deduplicate by job_id — keep the last entry (most recent callback)
-    seen: dict[str, int] = {}
-    for i, item in enumerate(pending):
-        seen[item["job_id"]] = i
-    pending = [pending[i] for i in sorted(seen.values())]
-
-    if not pending:
-        logger.info("No pending applications from Telegram or DB")
+    if not pending_jobs:
+        logger.info("No pending applications (apply_status=approved in DB)")
         session.close()
         return
 
@@ -155,64 +141,21 @@ async def run_applicant() -> None:
 
     if remaining_budget == 0:
         logger.warning("Daily application limit reached (%d)", settings.max_daily_applications)
-        for item in pending:
-            if item.get("callback_query_id"):
-                answer_callback(item["callback_query_id"], "Daily limit reached, try tomorrow!")
         session.close()
         return
 
     logger.info(
         "Processing %d applications (budget: %d/%d)",
-        min(len(pending), remaining_budget),
+        min(len(pending_jobs), remaining_budget),
         remaining_budget,
         settings.max_daily_applications,
     )
 
     applied_count = 0
     try:
-        for item in pending:
-            cb_id = item.get("callback_query_id")
-
+        for job in pending_jobs:
             if applied_count >= remaining_budget:
-                if cb_id:
-                    answer_callback(cb_id, "Daily limit reached!")
-                continue
-
-            job_id = item["job_id"]
-            job = session.query(Job).filter(Job.job_id == job_id).first()
-            if not job:
-                logger.warning("Job not found in DB: %s", job_id)
-                if cb_id:
-                    answer_callback(cb_id, "Job not found in database")
-                continue
-
-            if job.apply_status == "applied":
-                logger.info("Already applied to: %s", job.title)
-                if cb_id:
-                    answer_callback(cb_id, "Already applied!")
-                continue
-
-            if job.apply_status == "captcha":
-                logger.info("Captcha-blocked, skipping: %s", job.title)
-                if cb_id:
-                    answer_callback(cb_id, "Captcha — apply manually")
-                continue
-
-            if job.apply_status == "closed":
-                logger.info("Job closed, skipping: %s", job.title)
-                if cb_id:
-                    answer_callback(cb_id, "Job no longer available")
-                continue
-
-            if job.apply_status == "failed":
-                logger.info("Previously failed, retrying: %s", job.title)
-                # Allow retry — don't skip, just log
-
-            if cb_id:
-                answer_callback(cb_id, "Applying now...")
-
-            job.apply_status = "approved"
-            session.commit()
+                break
 
             result = await _apply_to_job(job, profile, session)
             applied_count += 1
@@ -261,7 +204,7 @@ async def run_applicant() -> None:
                 )
 
             # Random delay between applications for ban prevention
-            if applied_count < remaining_budget and applied_count < len(pending):
+            if applied_count < remaining_budget and applied_count < len(pending_jobs):
                 delay = random.uniform(30, 90)
                 logger.info("Waiting %.0fs before next application...", delay)
                 await asyncio.sleep(delay)
