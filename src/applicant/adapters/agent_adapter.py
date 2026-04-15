@@ -273,14 +273,38 @@ LINKEDIN_TYPEAHEAD_INPUT_FIND_JS = """(args) => {
     const idPart = (args.idContains || '').trim();
     const labelNeedle = (args.labelSubstring || '').trim().toLowerCase();
     let el = null;
-    if (idPart) {
-        const candidates = document.querySelectorAll('input[id]');
-        for (let i = 0; i < candidates.length; i++) {
-            const id = candidates[i].id || '';
-            if (id.indexOf(idPart) >= 0) {
-                el = candidates[i];
-                break;
+
+    const labelMatches = (inp) => {
+        if (!labelNeedle || !inp) return false;
+        if (inp.labels && inp.labels.length) {
+            for (let i = 0; i < inp.labels.length; i++) {
+                const t = (inp.labels[i].textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                if (t.includes(labelNeedle)) return true;
             }
+        }
+        return false;
+    };
+
+    if (idPart) {
+        const candidates = [];
+        document.querySelectorAll('input[id]').forEach((inp) => {
+            const id = inp.id || '';
+            if (id.indexOf(idPart) >= 0 && (inp.getAttribute('role') || '') === 'combobox') {
+                candidates.push(inp);
+            }
+        });
+        if (candidates.length === 0) {
+            document.querySelectorAll('input[id]').forEach((inp) => {
+                const id = inp.id || '';
+                if (id.indexOf(idPart) >= 0) candidates.push(inp);
+            });
+        }
+        if (candidates.length === 1) {
+            el = candidates[0];
+        } else if (candidates.length > 1 && labelNeedle) {
+            el = candidates.find(labelMatches) || candidates[0];
+        } else if (candidates.length > 0) {
+            el = candidates[0];
         }
     }
     if (!el && labelNeedle) {
@@ -345,7 +369,7 @@ LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat th
 - If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
 - Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
 - Same tool + same parameters: at most twice, then switch tool, target, or scroll. After ~4 attempts on one field, SKIP that field and continue.
-- LinkedIn typeahead comboboxes (Location, School, …): prefer fill_linkedin_typeahead(...); if stuck — wait(2); force_click_element or click(index) on [role=option]. Never send_keys ArrowDown/Enter on those fields.
+- LinkedIn typeahead comboboxes (Location, School, …): use fill_linkedin_typeahead(...) first; if stuck — wait(2); force_click_element or click(index) on [role=option]. Do not manually send_keys ArrowDown/Enter (the tool may use CDP keys internally).
 - Intl phone: pick country (+90 etc.) first, then digits in the number box; placeholder/example emails must be cleared and replaced with the real address.
 - Submit/Next errors: read ALL messages; fix each named field — not only the last one you touched.
 - If the visible page shows CAPTCHA, Cloudflare "Verify", or "Just a moment...", stop looping and report CAPTCHA_BLOCKED per your instructions.
@@ -485,17 +509,18 @@ class AgentAdapter(BaseAdapter):
                     _loc_example = (
                         f"PREFERRED for Location (city): fill_linkedin_typeahead("
                         f"label_substring='Location (city)', search_text={_pref!r}, "
-                        f"option_match_text={_tpick!r}, id_contains='location-GEO-LOCATION'{_fb_part}). "
-                        f"For School, Company, or other typeaheads: same tool with that field's label_substring, "
-                        f"a short search_text, option_match_text = exact visible row, and id_contains if the id "
-                        f"contains a stable fragment (inspect DevTools id= on the input).\n"
+                        f"option_match_text={_tpick!r}, id_contains='single-typeahead-entity'{_fb_part}). "
+                        f"(If that id fragment does not match, try 'location-GEO-LOCATION' or omit id_contains and "
+                        f"use label only.) For School, Company, or other typeaheads: same tool with that field's "
+                        f"label_substring, a short search_text, option_match_text = exact visible row, and id_contains "
+                        f"if the id contains a stable fragment (inspect DevTools id= on the input).\n"
                     )
                 else:
                     _loc_example = (
                         "PREFERRED for Location (city): fill_linkedin_typeahead("
                         "label_substring='Location (city)', search_text=<short city prefix>, "
                         "option_match_text=<full line e.g. 'Ankara, Türkiye'>, "
-                        "id_contains='location-GEO-LOCATION'). Set profile.location or profile.city. "
+                        "id_contains='single-typeahead-entity' or omit id_contains). Set profile.location or profile.city. "
                         "Other typeaheads: same parameters pattern with the correct label and id fragment.\n"
                     )
                 linkedin_location_block = (
@@ -513,7 +538,8 @@ class AgentAdapter(BaseAdapter):
                     f"in the CURRENT element list.\n"
                     f"4) Validation only passes after a list row is selected — typing alone always fails.\n"
                     f"5) FORBIDDEN: input() again on the same field before a successful pick from step 3. "
-                    f"FORBIDDEN: send_keys / ArrowDown / Enter on this combobox (often inserts literal text).\n\n"
+                    f"Do NOT call send_keys/ArrowDown/Enter yourself — fill_linkedin_typeahead tries CDP row click "
+                    f"then automatic ArrowDown+Enter on the focused combobox if clicks miss the list.\n\n"
                 )
 
             task_prompt = (
@@ -601,10 +627,8 @@ class AgentAdapter(BaseAdapter):
                 f"fill_text_field, done — match what the runtime exposes.\n"
                 f"- SCREENSHOT + element list are ground truth: trust visible labels and current indices; "
                 f"indices renumber after every action — never reuse an old index for a new field.\n"
-                f"- KEYBOARD FALLBACK: on some sites, send_keys('ArrowDown') then send_keys('Enter') after "
-                f"focusing can pick a highlighted row. NEVER use this on LinkedIn Easy Apply comboboxes "
-                f"(Location/city, school) — it often types literal text into the field. There, use wait → "
-                f"force_click_element or click(index) on [role=option] only.\n"
+                f"- LINKEDIN TYPEAHEAD: use fill_linkedin_typeahead(...) only — it handles row click and internal "
+                f"ArrowDown+Enter if needed. Do not manually send_keys ArrowDown/Enter on those comboboxes.\n"
                 f"- ERROR RECOVERY: if an action fails or a modal blocks the form (e.g. 'Save this application?'), "
                 f"dismiss or go_back once, then retry with a different strategy — do not loop the identical action "
                 f"more than twice without changing approach.\n"
@@ -672,8 +696,8 @@ class AgentAdapter(BaseAdapter):
                 f"also watch i/İ and Turkiye spelling).\n"
                 f"- The suggestion list is often inside Shadow DOM — if force_click_element says not found while "
                 f"the list is clearly visible, use click(index=...) on the first matching option line immediately.\n"
-                f"- Do NOT use send_keys for LinkedIn Location (city) — use wait(2) then force_click_element or "
-                f"click(index) on the suggestion row.\n\n"
+                f"- Prefer fill_linkedin_typeahead for Location (city); fallback: wait(2) then force_click_element or "
+                f"click(index) on [role=option].\n\n"
 
                 # ── DROPDOWN STEP-BY-STEP ──
                 f"DROPDOWN FIELDS — STEP-BY-STEP:\n"
@@ -1188,13 +1212,71 @@ class AgentAdapter(BaseAdapter):
                     if delay_ms > 0:
                         await _aio.sleep(delay_ms / 1000)
 
+            async def _cdp_key_tap(browser_session, key: str, code: str, vk: int) -> None:
+                """Single key press via CDP (for LinkedIn typeahead when option rows are not hit-testable)."""
+                cdp_session = await browser_session.get_or_create_cdp_session()
+                client = cdp_session.cdp_client
+                sid = cdp_session.session_id
+                await client.send_raw(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyDown",
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
+                        "nativeVirtualKeyCode": vk,
+                    },
+                    session_id=sid,
+                )
+                await client.send_raw(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": "keyUp",
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
+                        "nativeVirtualKeyCode": vk,
+                    },
+                    session_id=sid,
+                )
+
+            async def _linkedin_typeahead_keyboard_pick(
+                browser_session,
+                page,
+                input_id: str,
+                log_prefix: str,
+            ):
+                import asyncio as _aio
+
+                logger.info("%s: keyboard fallback after CDP row click failed", log_prefix)
+                if input_id:
+                    await page.evaluate(
+                        """(id) => {
+                            const el = document.getElementById(id);
+                            if (el) { el.focus(); try { el.click(); } catch (e) {} }
+                        }""",
+                        input_id,
+                    )
+                await _aio.sleep(0.35)
+                await _cdp_key_tap(browser_session, "ArrowDown", "ArrowDown", 40)
+                await _aio.sleep(0.22)
+                await _cdp_key_tap(browser_session, "Enter", "Enter", 13)
+                await _aio.sleep(0.4)
+                msg = (
+                    f"{log_prefix}: sent ArrowDown+Enter on the focused combobox — LinkedIn often renders "
+                    f"suggestions in a layer that CDP coordinate clicks miss. Check the next screenshot: if the "
+                    f"location error persists, use click(index) on a visible [role=option] line or re-run with a "
+                    f"different option_match_text matching the list."
+                )
+                return ActionResult(extracted_content=msg)
+
             @tools.action(description=(
                 "LinkedIn Easy Apply: fills any single-typeahead combobox (role=combobox) in one step — Location "
                 "(city), School, Company, etc. Same tool for all. Finds the input by id_contains (fragment of the "
-                "dynamic id, e.g. 'location-GEO-LOCATION') and/or label_substring (visible label, case-insensitive). "
-                "Types search_text with trusted key events, waits, then CDP-clicks the row matching option_match_text "
-                "(full visible line). Prefer over fill_text_field and over input()+ArrowDown/Enter. "
-                "Optional pick_fallback if the first match fails (e.g. city-only vs full 'City, Country' line)."
+                "dynamic id, e.g. 'single-typeahead-entity' or 'location-GEO-LOCATION') and/or label_substring. "
+                "Types search_text with trusted key events, waits, then CDP-clicks the row matching option_match_text. "
+                "If the row cannot be clicked (portal/Shadow DOM), automatically tries ArrowDown+Enter on the focused "
+                "combobox. Optional pick_fallback if the first text match fails."
             ))
             async def fill_linkedin_typeahead(
                 browser_session,
@@ -1273,10 +1355,17 @@ class AgentAdapter(BaseAdapter):
                     (option_match_text.split(",")[0].strip().lower() if "," in option_match_text else ""),
                 ):
                     await _aio.sleep(0.5)
-                    return await _force_click_evaluate_and_cdp(
+                    res = await _force_click_evaluate_and_cdp(
                         browser_session, page, pick_fallback, "", f"{log}_fallback"
                     )
-                return res
+                    out_fb = str(res.extracted_content or "")
+                    bad_fb = "not found for text" in out_fb.lower() or "element not found" in out_fb.lower()
+                    if not bad_fb:
+                        return res
+
+                return await _linkedin_typeahead_keyboard_pick(
+                    browser_session, page, _id, log
+                )
 
             @tools.action(description=(
                 "Fill a text input field by its visible label text (e.g. 'Soyadı', 'E-posta'). "
