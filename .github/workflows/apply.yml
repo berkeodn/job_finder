@@ -13,9 +13,10 @@ on:
 jobs:
   auto-apply:
     runs-on: self-hosted
-    # Same path as your dev clone: sync+ingest updates jobs.db here; apply seeds GHA workspace from it.
+    # Telegram + sync_then_ingest update this file — same DB the runner must use (not _work/.../jobs.db).
     env:
       JOB_FINDER_DESKTOP: "C:/Users/Berke/Desktop/job_finder"
+      DB_URL: "sqlite:///C:/Users/Berke/Desktop/job_finder/jobs.db"
     defaults:
       run:
         shell: powershell
@@ -54,13 +55,14 @@ jobs:
 
       # Persist runner-applied rows: workspace jobs.db from the PREVIOUS workflow run has applied/failed
       # states. The next run must snapshot that BEFORE overwriting with desktop, or we lose them.
-      - name: Backup workspace apply rows before desktop seed
+      - name: Backup apply rows before seed/download (desktop DB via DB_URL)
         run: |
-          if (Test-Path "jobs.db") {
+          $deskDb = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
+          if (Test-Path $deskDb) {
             venv\Scripts\Activate.ps1
-            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; import json; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); open('_workspace_pre_seed.json','w',encoding='utf-8').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print('workspace pre-seed:', len(rows), 'rows'); s.close()"
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; import json; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); open('_workspace_pre_seed.json','w',encoding='utf-8').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print('pre-seed backup:', len(rows), 'rows'); s.close()"
           } else {
-            Write-Host "No workspace jobs.db yet (first run on this machine)"
+            Write-Host "No desktop jobs.db yet at $deskDb"
           }
 
       # Same machine as dev: use jobs.db maintained by scripts/sync_then_ingest (artifact + Telegram).
@@ -80,11 +82,12 @@ jobs:
 
       - name: Backup local DB apply statuses
         run: |
-          if (Test-Path "jobs.db") {
+          $deskDb = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
+          if (Test-Path $deskDb) {
             venv\Scripts\Activate.ps1
             python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); import json; open('_apply_backup.json','w').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print(f'Backed up {len(rows)} apply statuses'); s.close()"
           } else {
-            Write-Host "No local DB yet"
+            Write-Host "No desktop jobs.db yet"
           }
 
       - name: Merge workspace pre-seed and desktop apply backups
@@ -102,6 +105,15 @@ jobs:
           search_artifacts: true
           workflow_search: true
           if_no_artifact_found: warn
+
+      # Python uses DB_URL (desktop). Artifact landed in workspace — replace desktop file so restore merges onto scrape rows.
+      - name: Sync downloaded artifact jobs.db to desktop
+        if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
+        run: |
+          if (Test-Path "jobs.db") {
+            Copy-Item -LiteralPath "jobs.db" -Destination (Join-Path $env:JOB_FINDER_DESKTOP "jobs.db") -Force
+            Write-Host "Workspace artifact jobs.db -> desktop (DB_URL target)"
+          }
 
       - name: Restore apply statuses and normalize DB
         run: |
@@ -136,10 +148,10 @@ jobs:
           python -m src.applicant.runner
 
       - name: Upload DB artifact
-        if: always() && hashFiles('jobs.db') != ''
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: jobs-db
-          path: jobs.db
+          path: ${{ env.JOB_FINDER_DESKTOP }}/jobs.db
           retention-days: 90
           overwrite: true
