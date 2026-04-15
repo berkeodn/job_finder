@@ -41,9 +41,12 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
     while batches < _MAX_DRAIN_BATCHES:
         batches += 1
         try:
+            # Do NOT pass allowed_updates here. If the queue has message/edited_message/etc.
+            # ahead of callbacks, filtering to callback_query only can return empty batches forever
+            # while pending_update_count stays > 0 — those updates must be acked with offset.
             resp = httpx.get(
                 f"{base}/getUpdates",
-                params={"allowed_updates": '["callback_query"]', "timeout": 5},
+                params={"timeout": 5},
                 timeout=15,
             )
             data = resp.json()
@@ -60,6 +63,7 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
             break
 
         max_update_id = 0
+        skipped_non_apply = 0
         for update in updates:
             uid = update.get("update_id", 0)
             if uid > max_update_id:
@@ -67,10 +71,12 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
 
             cb = update.get("callback_query")
             if not cb:
+                skipped_non_apply += 1
                 continue
 
             cb_data = cb.get("data", "")
             if not cb_data.startswith("apply:"):
+                skipped_non_apply += 1
                 continue
 
             job_id = cb_data.split(":", 1)[1]
@@ -95,6 +101,12 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
             else:
                 answer_callback(cb_qid, "Job not found in database.")
                 logger.warning("Ingest: unknown job_id from Telegram: %s", job_id)
+
+        if skipped_non_apply:
+            logger.info(
+                "Ingest: %s update(s) in batch were not apply:* (messages/other); acked to advance queue",
+                skipped_non_apply,
+            )
 
         if max_update_id:
             httpx.get(
@@ -122,7 +134,7 @@ def get_pending_applications() -> list[dict]:
     try:
         resp = httpx.get(
             f"{base}/getUpdates",
-            params={"allowed_updates": '["callback_query"]', "timeout": 5},
+            params={"timeout": 5},
             timeout=15,
         )
         data = resp.json()

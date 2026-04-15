@@ -4,8 +4,10 @@ __pycache__/
 .venv/
 venv/
 jobs.db
+jobs.db.scrape-artifact
 screenshots/
 linkedin_session.json
 test_*.py
 logs/
 _apply_backup.json
+_local_sync_apply_backup.json

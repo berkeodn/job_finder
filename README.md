@@ -160,3 +160,22 @@ job_finder/
 - **Inputs**: `test_url` — optional direct job URL for testing
 - **Does**: Downloads scrape DB → Restores local apply statuses → Processes approved/retried jobs → Uploads updated DB
 - **DB sync**: Backs up local `apply_status` before downloading scrape DB, then merges back to preserve apply results
+
+### Local machine: latest scrape DB + Telegram (no full apply here)
+
+GitHub does not push the scrape `jobs-db` artifact to your PC automatically. On your machine you only:
+
+1. **`scripts/sync_local_jobs_db_from_scrape_artifact.ps1`** — pull the latest successful scrape artifact, replace `jobs.db`, merge your existing `apply_status` rows back (`_local_sync_apply_backup.json`). Use `-SkipDownload` if `jobs.db.scrape-artifact` is already fresh.
+2. **Telegram ingest** — either run **`scripts/run_telegram_ingest.ps1`** afterward, or pass **`-RunTelegramIngest`** on the sync script so ingest runs immediately after sync. Add **`-AlsoRun`** with `-RunTelegramIngest` if you also want `src.applicant.runner` after ingest.
+
+**Scheduled task:** **`scripts/register_sync_then_ingest_schedule.ps1`** — every tick downloads the **latest** scrape `jobs-db` artifact (`gh`), merges into `jobs.db`, then runs Telegram ingest (hidden: **`sync_then_ingest_silent.vbs`**). Requires **`gh auth login`**. If you still have the legacy task **`job_finder-telegram-ingest`**, remove it: `Unregister-ScheduledTask -TaskName 'job_finder-telegram-ingest' -Confirm:$false`.
+
+That is the end of the local “sync + queue” step. You do **not** run Auto Apply just to upload an artifact.
+
+### Auto Apply Runner (self-hosted) — applies + uploads
+
+**`apply.yml`** on the self-hosted runner (scheduled every ~30 minutes) downloads the latest `jobs-db` artifact, merges apply statuses from **that** machine’s `jobs.db`, runs the LinkedIn applicant, then uploads the updated `jobs-db` artifact. So: **artifact refresh + approvals + applications + upload** happen in that job.
+
+If your dev PC and the self-hosted runner are **not** the same machine, `approved` must exist on the runner’s `jobs.db` (copy DB, or run Telegram ingest on the runner, or rely on the merge step in `apply.yml` if you already sync files).
+
+Inspect any SQLite copy: `python -m src.applicant.inspect_jobs_db` or `--db path/to/jobs.db`.

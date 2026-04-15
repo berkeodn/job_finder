@@ -1,7 +1,7 @@
 # Poll Telegram (getUpdates) and write apply:* callbacks -> jobs.db as approved.
 # Requires no bot webhook (Telegram getWebhookInfo url empty) so getUpdates receives updates.
 #
-# Schedule every 1-3 min: .\scripts\register_telegram_ingest_schedule.ps1
+# Schedule (sync + ingest): .\scripts\register_sync_then_ingest_schedule.ps1
 # Log: logs/telegram-ingest-latest.log (overwritten each run — only last run kept).
 #
 # Examples:
@@ -58,12 +58,20 @@ try {
         $code = $r2.ExitCode
     }
 
-    $ingestIdle = ($r1.ExitCode -eq 0) -and ($r1.Text -match "Telegram ingest finished: 0 callback")
+    # Parse "Telegram ingest finished: N callback(s) -> DB" so non-zero runs always get full log, not one-line idle.
+    $ingestCount = $null
+    if ($r1.Text -match 'Telegram ingest finished:\s*(\d+)\s*callback') {
+        $ingestCount = [int]$Matches[1]
+    }
+    $ingestIdle = ($r1.ExitCode -eq 0) -and ($ingestCount -eq 0)
+    # If telegram_poll logged anything (queue ack, duplicate apply, etc.), keep full stdout in the log file.
+    # Otherwise idle mode would only write one line and drop those INFO lines.
+    $hasTelegramPollDetail = $r1.Text -match 'telegram_poll: Ingest:'
     $runnerIdle = $false
     if ($AlsoRun -and $null -ne $r2) {
         $runnerIdle = ($r2.ExitCode -eq 0) -and ($r2.Text -match "No pending applications")
     }
-    $useOneLine = (-not $VerboseLog) -and $ingestIdle -and ((-not $AlsoRun) -or $runnerIdle)
+    $useOneLine = (-not $VerboseLog) -and $ingestIdle -and ((-not $AlsoRun) -or $runnerIdle) -and (-not $hasTelegramPollDetail)
 
     if ($useOneLine) {
         $line = "[$stamp] idle ingest=0 callbacks"
@@ -74,6 +82,9 @@ try {
     } else {
         $parts = [System.Collections.Generic.List[string]]::new()
         $parts.Add("===== $stamp run_telegram_ingest AlsoRun=$AlsoRun =====")
+        if (($null -ne $ingestCount) -and ($ingestCount -gt 0)) {
+            $parts.Add("[ingest] $ingestCount callback(s) processed - full output below")
+        }
         if ($r1.Text) {
             $parts.Add($r1.Text)
             Write-Output $r1.Text

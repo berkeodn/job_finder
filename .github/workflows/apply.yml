@@ -53,7 +53,7 @@ jobs:
           }
 
       # Same machine as dev: use jobs.db maintained by scripts/sync_then_ingest (artifact + Telegram).
-      # If we copied it, skip artifact download — otherwise download would overwrite this file.
+      # If we copied it, skip artifact download; otherwise download would overwrite this file.
       - name: Seed jobs.db from desktop clone
         id: desktop_jobs_db
         run: |
@@ -61,10 +61,10 @@ jobs:
           if (Test-Path $src) {
             Copy-Item -LiteralPath $src -Destination (Join-Path $env:GITHUB_WORKSPACE "jobs.db") -Force
             Write-Host "Seeded workspace jobs.db from $src"
-            "from_desktop=true" >> $env:GITHUB_OUTPUT
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "from_desktop=true"
           } else {
-            Write-Host "No desktop jobs.db at $src — will download jobs-db artifact next."
-            "from_desktop=false" >> $env:GITHUB_OUTPUT
+            Write-Host "No desktop jobs.db at $src - will download jobs-db artifact next."
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "from_desktop=false"
           }
 
       - name: Backup local DB apply statuses
@@ -76,7 +76,7 @@ jobs:
             Write-Host "No local DB yet"
           }
 
-      # Skipped when desktop jobs.db was copied — that DB already includes latest scrape merge + Telegram ingest.
+      # Skipped when desktop jobs.db was copied (that DB already includes latest scrape merge + Telegram ingest).
       - name: Download latest jobs.db artifact
         if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
         uses: dawidd6/action-download-artifact@v6
