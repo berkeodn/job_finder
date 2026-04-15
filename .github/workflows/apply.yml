@@ -13,7 +13,7 @@ on:
 jobs:
   auto-apply:
     runs-on: self-hosted
-    # Telegram + sync_then_ingest update this file — same DB the runner must use (not _work/.../jobs.db).
+    # Telegram + sync_then_ingest update this file — runner and all Python DB steps use it via DB_URL.
     env:
       JOB_FINDER_DESKTOP: "C:/Users/Berke/Desktop/job_finder"
       DB_URL: "sqlite:///C:/Users/Berke/Desktop/job_finder/jobs.db"
@@ -53,51 +53,31 @@ jobs:
             Write-Host "No saved session found - login will be required"
           }
 
-      # Persist runner-applied rows: workspace jobs.db from the PREVIOUS workflow run has applied/failed
-      # states. The next run must snapshot that BEFORE overwriting with desktop, or we lose them.
-      - name: Backup apply rows before seed/download (desktop DB via DB_URL)
+      - name: Check for desktop jobs.db
+        id: desktop_db
+        run: |
+          $p = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
+          if (Test-Path $p) {
+            Write-Host "Desktop jobs.db exists: $p"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "exists=true"
+          } else {
+            Write-Host "No desktop jobs.db — will download jobs-db artifact"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "exists=false"
+          }
+
+      # One export: merge/restore use this after artifact (if any) replaces desktop.
+      - name: Backup apply statuses from desktop DB
         run: |
           $deskDb = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
           if (Test-Path $deskDb) {
             venv\Scripts\Activate.ps1
-            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; import json; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); open('_workspace_pre_seed.json','w',encoding='utf-8').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print('pre-seed backup:', len(rows), 'rows'); s.close()"
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; import json; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); open('_apply_backup.json','w',encoding='utf-8').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print('apply backup:', len(rows), 'rows'); s.close()"
           } else {
-            Write-Host "No desktop jobs.db yet at $deskDb"
+            Write-Host "Skip backup (no desktop DB yet)"
           }
 
-      # Same machine as dev: use jobs.db maintained by scripts/sync_then_ingest (artifact + Telegram).
-      # If we copied it, skip artifact download; otherwise download would overwrite this file.
-      - name: Seed jobs.db from desktop clone
-        id: desktop_jobs_db
-        run: |
-          $src = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
-          if (Test-Path $src) {
-            Copy-Item -LiteralPath $src -Destination (Join-Path $env:GITHUB_WORKSPACE "jobs.db") -Force
-            Write-Host "Seeded workspace jobs.db from $src"
-            Add-Content -Path $env:GITHUB_OUTPUT -Value "from_desktop=true"
-          } else {
-            Write-Host "No desktop jobs.db at $src - will download jobs-db artifact next."
-            Add-Content -Path $env:GITHUB_OUTPUT -Value "from_desktop=false"
-          }
-
-      - name: Backup local DB apply statuses
-        run: |
-          $deskDb = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
-          if (Test-Path $deskDb) {
-            venv\Scripts\Activate.ps1
-            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); import json; open('_apply_backup.json','w').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print(f'Backed up {len(rows)} apply statuses'); s.close()"
-          } else {
-            Write-Host "No desktop jobs.db yet"
-          }
-
-      - name: Merge workspace pre-seed and desktop apply backups
-        run: |
-          venv\Scripts\Activate.ps1
-          python -c "from src.db.apply_backup_merge import merge_apply_backup_json_files; print(merge_apply_backup_json_files(['_workspace_pre_seed.json','_apply_backup.json'], '_apply_backup.json'))"
-
-      # Skipped when desktop jobs.db was copied (that DB already includes latest scrape merge + Telegram ingest).
       - name: Download latest jobs.db artifact
-        if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
+        if: ${{ steps.desktop_db.outputs.exists != 'true' }}
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
@@ -106,13 +86,12 @@ jobs:
           workflow_search: true
           if_no_artifact_found: warn
 
-      # Python uses DB_URL (desktop). Artifact landed in workspace — replace desktop file so restore merges onto scrape rows.
       - name: Sync downloaded artifact jobs.db to desktop
-        if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
+        if: ${{ steps.desktop_db.outputs.exists != 'true' }}
         run: |
           if (Test-Path "jobs.db") {
             Copy-Item -LiteralPath "jobs.db" -Destination (Join-Path $env:JOB_FINDER_DESKTOP "jobs.db") -Force
-            Write-Host "Workspace artifact jobs.db -> desktop (DB_URL target)"
+            Write-Host "Artifact jobs.db -> desktop"
           }
 
       - name: Restore apply statuses and normalize DB

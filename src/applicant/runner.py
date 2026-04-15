@@ -16,13 +16,13 @@ from src.db.database import engine, get_session, init_db
 from src.db.models import Job
 from src.notifier.telegram import send_alert
 
-from .adapters import AgentAdapter, GreenhouseAdapter, LeverAdapter, LinkedInAdapter
+from .adapters import AgentAdapter, GreenhouseAdapter, LeverAdapter
 from .base import ApplicantProfile, ApplyResult, load_applicant_profile
 
 logger = logging.getLogger(__name__)
 
+# LinkedIn URLs use AgentAdapter (see _apply_to_job); rule-based LinkedInAdapter is unused here.
 _ADAPTERS = {
-    "linkedin": LinkedInAdapter(),
     "lever": LeverAdapter(),
     "greenhouse": GreenhouseAdapter(),
     "agent": AgentAdapter(),
