@@ -21,16 +21,85 @@ _SKIP_WHEN_CURRENT_APPROVED = frozenset(
     {"failed", "captcha", "closed", "not_applied", ""}
 )
 
+# When merging two apply-status JSON exports (e.g. GHA workspace vs desktop clone), prefer the
+# more terminal state so runner-applied rows are not lost when desktop DB is older.
+_STATUS_RANK = {
+    "applied": 100,
+    "closed": 85,
+    "captcha": 75,
+    "failed": 65,
+    "approved": 50,
+    "not_applied": 10,
+    "": 10,
+}
+
+
+def _rank_status(st: str) -> int:
+    s = (st or "").strip() or "not_applied"
+    return int(_STATUS_RANK.get(s, 0))
+
+
+def merge_apply_backup_json_files(paths: list[str], out_path: str) -> str:
+    """
+    Merge multiple JSON backups (same shape as CI export: list of {jid, st, at}).
+    Duplicate job_ids: keep the row with higher _STATUS_RANK; ties on 'applied' prefer non-null at.
+    Missing input files are skipped.
+    """
+    existing = [p for p in paths if os.path.isfile(p)]
+    if not existing:
+        return "merge: no input files"
+
+    rows_in_order: list[dict] = []
+    for p in existing:
+        raw = json.loads(open(p, encoding="utf-8").read())
+        if isinstance(raw, list):
+            rows_in_order.extend(raw)
+
+    by_jid: dict[str, dict] = {}
+    for r in rows_in_order:
+        jid = r.get("jid")
+        if not jid:
+            continue
+        st = (r.get("st") or "not_applied").strip() or "not_applied"
+        prev = by_jid.get(jid)
+        if prev is None:
+            by_jid[jid] = dict(r)
+            continue
+        st_old = (prev.get("st") or "not_applied").strip() or "not_applied"
+        rn, ro = _rank_status(st), _rank_status(st_old)
+        if rn > ro:
+            by_jid[jid] = dict(r)
+        elif rn == ro == _rank_status("applied"):
+            at_new = r.get("at")
+            at_old = prev.get("at")
+            if at_new and not at_old:
+                by_jid[jid] = dict(r)
+
+    out_list = list(by_jid.values())
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(out_list))
+    return (
+        f"merge: wrote {len(out_list)} job(s) to {out_path} "
+        f"from {len(existing)} file(s)"
+    )
+
 
 def restore_apply_statuses_from_backup(
     session: Session,
     backup_path: str = "_apply_backup.json",
+    *,
+    merged_backup: bool = False,
 ) -> str:
     """
-    Apply backed-up rows onto the current DB (post-artifact). If the DB already has
-    apply_status='approved' for a job (e.g. from telegram-ingest) and the backup would
-    replace it with a stale failed/captcha/closed state, that row is skipped. Backup
-    status 'applied' is always merged so jobs do not stay stuck as approved after a real apply.
+    Apply backed-up rows onto the current DB (post-artifact).
+
+    Local sync (merged_backup=False): If the DB already has apply_status='approved' and the
+    backup would replace it with failed/captcha/closed/not_applied, skip — so a fresh Telegram
+    approval is not overwritten by an older failure from the same machine.
+
+    CI after merge_apply_backup_json_files (merged_backup=True): Conflicts are already
+    resolved in the JSON; always apply each row. Otherwise runner failures never reach the DB
+    when the artifact row is still 'approved' from desktop/Telegram.
     """
     if not os.path.exists(backup_path):
         return "restore: no _apply_backup.json"
@@ -50,7 +119,11 @@ def restore_apply_statuses_from_backup(
         st = r.get("st") or "not_applied"
         cur = (j.apply_status or "").strip() or "not_applied"
 
-        if cur == "approved" and st in _SKIP_WHEN_CURRENT_APPROVED:
+        if (
+            not merged_backup
+            and cur == "approved"
+            and st in _SKIP_WHEN_CURRENT_APPROVED
+        ):
             skipped += 1
             continue
 
@@ -69,6 +142,7 @@ def restore_apply_statuses_from_backup(
         .update({Job.apply_status: "not_applied"})
     )
     session.commit()
-    return (
-        f"restore: merged={merged} skipped_keep_approved={skipped} fixed_empty={fixed}"
-    )
+    tail = f"merged={merged} skipped_keep_approved={skipped} fixed_empty={fixed}"
+    if merged_backup:
+        tail += " (merged_backup=True)"
+    return f"restore: {tail}"

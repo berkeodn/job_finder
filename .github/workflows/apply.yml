@@ -52,6 +52,17 @@ jobs:
             Write-Host "No saved session found - login will be required"
           }
 
+      # Persist runner-applied rows: workspace jobs.db from the PREVIOUS workflow run has applied/failed
+      # states. The next run must snapshot that BEFORE overwriting with desktop, or we lose them.
+      - name: Backup workspace apply rows before desktop seed
+        run: |
+          if (Test-Path "jobs.db") {
+            venv\Scripts\Activate.ps1
+            python -c "from src.db.database import init_db, get_session; from src.db.models import Job; import json; init_db(); s = get_session(); rows = s.query(Job.job_id, Job.apply_status, Job.applied_at).filter(Job.apply_status.notin_(['not_applied', ''])).all(); open('_workspace_pre_seed.json','w',encoding='utf-8').write(json.dumps([{'jid':r[0],'st':r[1],'at':str(r[2]) if r[2] else None} for r in rows])); print('workspace pre-seed:', len(rows), 'rows'); s.close()"
+          } else {
+            Write-Host "No workspace jobs.db yet (first run on this machine)"
+          }
+
       # Same machine as dev: use jobs.db maintained by scripts/sync_then_ingest (artifact + Telegram).
       # If we copied it, skip artifact download; otherwise download would overwrite this file.
       - name: Seed jobs.db from desktop clone
@@ -76,6 +87,11 @@ jobs:
             Write-Host "No local DB yet"
           }
 
+      - name: Merge workspace pre-seed and desktop apply backups
+        run: |
+          venv\Scripts\Activate.ps1
+          python -c "from src.db.apply_backup_merge import merge_apply_backup_json_files; print(merge_apply_backup_json_files(['_workspace_pre_seed.json','_apply_backup.json'], '_apply_backup.json'))"
+
       # Skipped when desktop jobs.db was copied (that DB already includes latest scrape merge + Telegram ingest).
       - name: Download latest jobs.db artifact
         if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
@@ -90,7 +106,7 @@ jobs:
       - name: Restore apply statuses and normalize DB
         run: |
           venv\Scripts\Activate.ps1
-          python -c "from src.db.database import init_db, get_session; from src.db.apply_backup_merge import restore_apply_statuses_from_backup; init_db(); s = get_session(); print(restore_apply_statuses_from_backup(s)); s.close()"
+          python -c "from src.db.database import init_db, get_session; from src.db.apply_backup_merge import restore_apply_statuses_from_backup; init_db(); s = get_session(); print(restore_apply_statuses_from_backup(s, merged_backup=True)); s.close()"
 
       - name: Verify DB exists
         run: |
