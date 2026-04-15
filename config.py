@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     max_daily_applications: int = 20
     headless: bool = True
 
+    # browser-use BrowserProfile (see browser_use.browser.profile.BrowserProfile model_fields)
+    browser_use_cross_origin_iframes: bool = True
+    browser_use_max_iframes: int = 120
+    browser_use_max_iframe_depth: int = 8
+    browser_use_min_wait_page_load_time: float = 0.35
+    browser_use_wait_network_idle_page_load_time: float = 0.75
+    browser_use_wait_between_actions: float = 0.15
+    browser_use_accept_downloads: bool = True
+
     # browser-use Agent: local loop fingerprint (hard-stop) + optional mid-run loop prompt
     agent_loop_watchdog_enabled: bool = True
     agent_loop_window_actions: int = 24

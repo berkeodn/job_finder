@@ -47,6 +47,7 @@ LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat th
 - If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
 - Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
 - Same tool + same parameters: at most twice, then switch tool, target, or scroll. After ~4 attempts on one field, SKIP that field and continue.
+- LinkedIn Location (city): if stuck on input() loops — stop typing; wait(2); force_click_element with profile Location line or click(index) on [role=option]. Never send_keys ArrowDown/Enter on that field.
 - Intl phone: pick country (+90 etc.) first, then digits in the number box; placeholder/example emails must be cleared and replaced with the real address.
 - Submit/Next errors: read ALL messages; fix each named field — not only the last one you touched.
 - If the visible page shows CAPTCHA, Cloudflare "Verify", or "Just a moment...", stop looping and report CAPTCHA_BLOCKED per your instructions.
@@ -156,6 +157,39 @@ class AgentAdapter(BaseAdapter):
                 f"closure banner, proceed with the application.\n"
             )
 
+            linkedin_location_block = ""
+            if is_linkedin:
+                _loc = (profile.location or "").strip()
+                _city = (profile.city or "").strip()
+                _primary = ""
+                if _loc:
+                    _primary = (
+                        f"Target line for the Location (city) typeahead (from profile): {_loc!r}. "
+                        f"Prefer force_click_element(text={_loc!r}) once suggestions exist.\n"
+                    )
+                elif _city:
+                    _primary = (
+                        f"Profile has no full Location line — use the visible suggestion row, typically "
+                        f"containing {_city!r} and the country (e.g. 'Ankara, Türkiye').\n"
+                    )
+                else:
+                    _primary = (
+                        "Type a short city keyword, then pick the matching row from the list (see steps).\n"
+                    )
+                _kw = repr(_city) if _city else "the city keyword"
+                linkedin_location_block = (
+                    f"\nLINKEDIN EASY APPLY — LOCATION (city) — MANDATORY SEQUENCE (loops if skipped):\n"
+                    f"{_primary}"
+                    f"1) input(index=..., text={_kw}, clear=True) at most ONCE for this attempt.\n"
+                    f"2) wait(seconds=2) — required so the suggestion list can render.\n"
+                    f"3) Select a row: force_click_element(text=<exact visible line>) using the profile "
+                    f"Location line or screenshot text, OR click(index=N) on a [role=option] / suggestion row "
+                    f"in the CURRENT element list.\n"
+                    f"4) Validation only passes after a list row is selected — typing alone always fails.\n"
+                    f"5) FORBIDDEN: input() again on the same field before a successful pick from step 3. "
+                    f"FORBIDDEN: send_keys / ArrowDown / Enter on this combobox (often inserts literal text).\n\n"
+                )
+
             task_prompt = (
                 f"{login_instructions}"
                 f"{closed_job_instructions}"
@@ -172,6 +206,7 @@ class AgentAdapter(BaseAdapter):
                 f"- Location: {profile.location}\n"
                 f"- Address / Cadde/Sokak Adı: {profile.address_line}\n"
                 f"- City / Şehir: {profile.city}\n"
+                f"{linkedin_location_block}"
                 f"- District / Mahalle/Köy / İlçe: {profile.district}\n"
                 f"- Postal Code / Posta Kodu: {profile.postal_code}\n"
                 f"- Education: {profile.education}\n"
@@ -239,9 +274,10 @@ class AgentAdapter(BaseAdapter):
                 f"send_keys, select_dropdown, force_click_element, fill_text_field, done — match what the runtime exposes.\n"
                 f"- SCREENSHOT + element list are ground truth: trust visible labels and current indices; "
                 f"indices renumber after every action — never reuse an old index for a new field.\n"
-                f"- KEYBOARD FALLBACK (official workaround when clicks miss): after focusing a combobox or button, "
-                f"try send_keys with e.g. 'ArrowDown' / 'ArrowDown Enter' or 'Tab Tab Enter' instead of repeating "
-                f"the same click. Useful for typeahead rows and stubborn controls.\n"
+                f"- KEYBOARD FALLBACK: on some sites, send_keys('ArrowDown') then send_keys('Enter') after "
+                f"focusing can pick a highlighted row. NEVER use this on LinkedIn Easy Apply comboboxes "
+                f"(Location/city, school) — it often types literal text into the field. There, use wait → "
+                f"force_click_element or click(index) on [role=option] only.\n"
                 f"- ERROR RECOVERY: if an action fails or a modal blocks the form (e.g. 'Save this application?'), "
                 f"dismiss or go_back once, then retry with a different strategy — do not loop the identical action "
                 f"more than twice without changing approach.\n"
@@ -304,8 +340,8 @@ class AgentAdapter(BaseAdapter):
                 f"force_click once with exact screenshot text (watch Turkish characters: Türkiye vs Turkiye).\n"
                 f"- The suggestion list is often inside Shadow DOM — if force_click_element says not found while "
                 f"the list is clearly visible, use click(index=...) on the first matching option line immediately.\n"
-                f"- Keyboard escape hatch (browser-use docs): with the city field focused and suggestions open, "
-                f"try send_keys('ArrowDown') once or twice then send_keys('Enter') to pick the highlighted row.\n\n"
+                f"- Do NOT use send_keys for LinkedIn Location (city) — use wait(2) then force_click_element or "
+                f"click(index) on the suggestion row.\n\n"
 
                 # ── DROPDOWN STEP-BY-STEP ──
                 f"DROPDOWN FIELDS — STEP-BY-STEP:\n"
@@ -351,7 +387,9 @@ class AgentAdapter(BaseAdapter):
                 f"READ the available options from screenshot, pick the best one → "
                 f"force_click_element. If still fails → SKIP.\n"
                 f"CRITICAL: NEVER type the same text more than twice into a dropdown. "
-                f"If 0 results, try a DIFFERENT keyword or open the dropdown to see options.\n\n"
+                f"If 0 results, try a DIFFERENT keyword or open the dropdown to see options.\n"
+                f"LINKEDIN LOCATION (city): max 2 input attempts; after the first input you MUST wait(2) then "
+                f"pick a suggestion — never a third input without a pick.\n\n"
 
                 # ── BANNED ACTIONS ──
                 f"BANNED ACTIONS (NEVER USE):\n"
@@ -437,6 +475,8 @@ class AgentAdapter(BaseAdapter):
                 "Force-click an element using a real browser click (CDP) when normal click "
                 "doesn't work. Useful for Workday and React frameworks that ignore JS events. "
                 "Provide the visible text of the element to click. "
+                "LinkedIn Easy Apply typeahead: after input+wait, pass the FULL suggestion line "
+                "(e.g. city + country as shown) — required for Location (city) comboboxes. "
                 "This generates trusted browser events that React will process."
             ))
             async def force_click_element(
@@ -579,6 +619,10 @@ class AgentAdapter(BaseAdapter):
                                 '[id^="basic-result-"]',
                                 'li[role="presentation"]',
                                 '[class*="search-typeahead-v2"] [role="option"]',
+                                '[class*="typeahead"] [role="option"]',
+                                '[class*="jobs-easy-apply"] [role="option"]',
+                                '[class*="artdeco-typeahead"] [role="option"]',
+                                'div[class*="typeahead-result"]',
                             ].join(", ");
                             const opts = deepQuerySelectorAll(optSel).filter(optVisible);
                             const nt = trFold(t);
@@ -1428,6 +1472,15 @@ class AgentAdapter(BaseAdapter):
                 extra_chromium_args=_LAUNCH_ARGS,
                 user_agent=_USER_AGENT,
                 viewport={"width": 1280, "height": 800},
+                # Iframes (ATS / Appcast-style embeds): same knobs as browser-use apply_to_job Browser(...)
+                cross_origin_iframes=settings.browser_use_cross_origin_iframes,
+                max_iframes=settings.browser_use_max_iframes,
+                max_iframe_depth=settings.browser_use_max_iframe_depth,
+                # Slightly more stable than library defaults on SPAs (LinkedIn, Workday-like flows)
+                minimum_wait_page_load_time=settings.browser_use_min_wait_page_load_time,
+                wait_for_network_idle_page_load_time=settings.browser_use_wait_network_idle_page_load_time,
+                wait_between_actions=settings.browser_use_wait_between_actions,
+                accept_downloads=settings.browser_use_accept_downloads,
             )
             if SESSION_PATH.exists():
                 bp_kwargs["storage_state"] = str(SESSION_PATH)
