@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -5,7 +7,21 @@ from config import settings
 
 from .models import Base
 
-engine = create_engine(settings.db_url, echo=False)
+
+def _resolve_sqlite_url(url: str) -> str:
+    """Relative sqlite URLs (e.g. sqlite:///jobs.db) follow process cwd; pin to repo root."""
+    if not url.startswith("sqlite:///"):
+        return url
+    rest = url[len("sqlite:///") :]
+    # Absolute: /unix/path or C:/Windows/path
+    if rest.startswith("/") or (len(rest) > 1 and rest[1] == ":"):
+        return url
+    repo_root = Path(__file__).resolve().parents[2]
+    abs_path = (repo_root / rest).resolve()
+    return f"sqlite:///{abs_path.as_posix()}"
+
+
+engine = create_engine(_resolve_sqlite_url(settings.db_url), echo=False)
 SessionLocal = sessionmaker(bind=engine)
 
 
