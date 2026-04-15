@@ -15,7 +15,7 @@ jobs:
     runs-on: self-hosted
     # Same path as your dev clone: sync+ingest updates jobs.db here; apply seeds GHA workspace from it.
     env:
-      JOB_FINDER_DESKTOP: "C:\Users\Berke\Desktop\job_finder"
+      JOB_FINDER_DESKTOP: "C:/Users/Berke/Desktop/job_finder"
     defaults:
       run:
         shell: powershell
