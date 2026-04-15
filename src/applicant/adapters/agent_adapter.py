@@ -37,6 +37,304 @@ def _is_masked_email_placeholder(value: str) -> bool:
     return False
 
 
+# Shared with force_click_element — LinkedIn typeahead options often live in Shadow DOM.
+FORCE_CLICK_FIND_JS = """(args) => {
+                    let el;
+                    const t = (args.text || '').trim();
+                    const sel = (args.selector || '').trim();
+
+                    const deepQuerySelectorAll = (selectorsCsv) => {
+                        const sels = selectorsCsv.split(",").map((s) => s.trim()).filter(Boolean);
+                        const seen = new Set();
+                        const out = [];
+                        const addFrom = (root) => {
+                            if (!root || !root.querySelectorAll) return;
+                            for (const oneSel of sels) {
+                                try {
+                                    root.querySelectorAll(oneSel).forEach((n) => {
+                                        if (!seen.has(n)) {
+                                            seen.add(n);
+                                            out.push(n);
+                                        }
+                                    });
+                                } catch (e) { /* invalid sel */ }
+                            }
+                            const desc = root.querySelectorAll("*");
+                            for (let i = 0; i < desc.length; i++) {
+                                const n = desc[i];
+                                if (n.shadowRoot) addFrom(n.shadowRoot);
+                            }
+                        };
+                        addFrom(document);
+                        return out;
+                    };
+
+                    if (t) {
+                        const labels = [...document.querySelectorAll('label')];
+                        const exactLabel = labels.find(l =>
+                            l.textContent.trim() === t && l.offsetParent !== null
+                        );
+                        const partialLabel = !exactLabel && labels.find(l =>
+                            l.textContent.trim().includes(t) && l.offsetParent !== null
+                        );
+                        const matchLabel = exactLabel || partialLabel;
+                        if (matchLabel) {
+                            const forId = matchLabel.getAttribute('for');
+                            if (forId) {
+                                const inp = document.getElementById(forId);
+                                if (inp && (inp.type === 'radio' || inp.type === 'checkbox')) {
+                                    const r = inp.getBoundingClientRect();
+                                    const style = getComputedStyle(inp);
+                                    const hidden = r.width < 5 || r.height < 5
+                                        || style.opacity === '0' || style.visibility === 'hidden';
+                                    el = hidden ? matchLabel : inp;
+                                } else {
+                                    el = matchLabel;
+                                }
+                            }
+                            if (!el) el = matchLabel;
+                        }
+
+                        if (!el) {
+                            let scopeNodes;
+                            if (sel) {
+                                try {
+                                    scopeNodes = [...document.querySelectorAll(sel)];
+                                } catch (e) {
+                                    scopeNodes = [...document.querySelectorAll('*')];
+                                }
+                            } else {
+                                scopeNodes = [...document.querySelectorAll('*')];
+                            }
+                            const scope = scopeNodes;
+                            el = scope.find(e =>
+                                e.textContent.trim() === t
+                                && e.offsetParent !== null
+                                && e.children.length === 0
+                            );
+                            if (!el) el = scope.find(e =>
+                                e.textContent.trim() === t
+                                && e.offsetParent !== null
+                            );
+                            if (!el) el = scope.find(e =>
+                                e.innerText && e.innerText.includes(t)
+                                && e.offsetParent !== null
+                                && e.children.length === 0
+                            );
+                            if (!el) {
+                                const shorter = t.substring(0, 30);
+                                el = scope.find(e =>
+                                    e.textContent.includes(shorter)
+                                    && e.offsetParent !== null
+                                    && e.children.length === 0
+                                );
+                            }
+                        }
+
+                        if (!el && t) {
+                            const trFold = (s) => {
+                                let x = (s || "").replace(/\\s+/g, " ").trim().toLowerCase();
+                                const map = {
+                                    "ı": "i", "İ": "i", "i̇": "i",
+                                    "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c",
+                                    "â": "a", "î": "i", "û": "u",
+                                };
+                                for (const [k, v] of Object.entries(map)) {
+                                    x = x.split(k).join(v);
+                                }
+                                try {
+                                    x = x.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                                } catch (e) { /* ignore */ }
+                                return x;
+                            };
+                            const foldLoc = (s) => {
+                                let x = trFold(s);
+                                x = x.replace(/\\bturkey\\b/g, "turkiye");
+                                return x;
+                            };
+                            const optVisible = (o) => {
+                                const r = o.getBoundingClientRect();
+                                const st = getComputedStyle(o);
+                                return r.width >= 1 && r.height >= 1
+                                    && st.visibility !== "hidden"
+                                    && st.display !== "none"
+                                    && parseFloat(st.opacity || "1") > 0.05;
+                            };
+                            const txt = (o) => (o.innerText || o.textContent || "");
+                            const optSel = [
+                                '[role="option"]',
+                                '[role="menuitemcheckbox"]',
+                                '[role="menuitem"]',
+                                '[id^="basic-result-"]',
+                                'li[role="presentation"]',
+                                '[class*="search-typeahead-v2"] [role="option"]',
+                                '[class*="typeahead"] [role="option"]',
+                                '[class*="jobs-easy-apply"] [role="option"]',
+                                '[class*="artdeco-typeahead"] [role="option"]',
+                                'div[class*="typeahead-result"]',
+                            ].join(", ");
+                            const opts = deepQuerySelectorAll(optSel).filter(optVisible);
+                            const nt = foldLoc(t);
+                            const parts = nt.split(",").map((p) => p.trim()).filter(Boolean);
+                            const scoreOpt = (o) => {
+                                const s = foldLoc(txt(o));
+                                if (s === nt) return 100;
+                                if (s.includes(nt) && nt.length >= 4) return 80;
+                                if (parts.length >= 2
+                                    && parts.every((p) => p.length >= 2 && s.includes(p))) return 70;
+                                if (parts.length && parts[0].length >= 3 && s.includes(parts[0])) return 50;
+                                return 0;
+                            };
+                            let best = null;
+                            let bestScore = 0;
+                            for (const o of opts) {
+                                const sc = scoreOpt(o);
+                                if (sc > bestScore) { bestScore = sc; best = o; }
+                            }
+                            if (bestScore >= 50) el = best;
+                        }
+
+                        if (!el) {
+                            const allEls = [...document.querySelectorAll('*')];
+                            const textEl = allEls.find(e =>
+                                e.children.length === 0
+                                && e.innerText && e.innerText.includes(t)
+                                && e.offsetParent !== null
+                            ) || allEls.find(e =>
+                                e.innerText && e.innerText.includes(t)
+                                && e.offsetParent !== null
+                            );
+                            if (textEl) {
+                                const cb = textEl.closest('label, [role="checkbox"], [role="radio"]');
+                                if (cb) el = cb;
+                                else {
+                                    const parent = textEl.parentElement;
+                                    if (parent) {
+                                        const nearCb = parent.querySelector(
+                                            'input[type="checkbox"], input[type="radio"], [role="checkbox"]'
+                                        );
+                                        if (nearCb) el = nearCb;
+                                        else el = textEl;
+                                    } else el = textEl;
+                                }
+                            }
+                        }
+                    }
+                    if (!el && sel && !t) {
+                        let matches;
+                        try {
+                            matches = document.querySelectorAll(sel);
+                        } catch (e) {
+                            matches = [];
+                        }
+                        if (matches.length === 1) el = matches[0];
+                    }
+                    if (!el) return JSON.stringify({error: 'Element not found for text="' + t + '"'});
+
+                    let target = el;
+
+                    if (el.tagName === 'INPUT'
+                        && (el.type === 'radio' || el.type === 'checkbox')) {
+                        const r = el.getBoundingClientRect();
+                        const style = getComputedStyle(el);
+                        const hidden = r.width < 5 || r.height < 5
+                            || style.opacity === '0' || style.visibility === 'hidden';
+                        if (hidden && el.id) {
+                            const lbl = document.querySelector('label[for="' + el.id + '"]');
+                            if (lbl) target = lbl;
+                        }
+                    }
+
+                    let radio = target.closest('[role="radio"], [role="checkbox"], [role="option"]');
+                    if (!radio) {
+                        for (let p = target.parentElement; p && p !== document.body; p = p.parentElement) {
+                            const r = p.getAttribute('role');
+                            if (r === 'radio' || r === 'checkbox' || r === 'option') {
+                                radio = p; break;
+                            }
+                        }
+                    }
+                    if (radio) target = radio;
+
+                    target.scrollIntoView({block: 'center'});
+                    const rect = target.getBoundingClientRect();
+                    return JSON.stringify({
+                        x: Math.round(rect.x + rect.width / 2),
+                        y: Math.round(rect.y + rect.height / 2),
+                        tag: target.tagName,
+                        role: target.getAttribute('role') || 'none',
+                        text: t.slice(0, 50),
+                        ariaChecked: target.getAttribute('aria-checked')
+                    });
+                }"""
+
+# LinkedIn Easy Apply: single-typeahead-entity fields (location, school, company, …) share the same combobox pattern.
+LINKEDIN_TYPEAHEAD_INPUT_FIND_JS = """(args) => {
+    const idPart = (args.idContains || '').trim();
+    const labelNeedle = (args.labelSubstring || '').trim().toLowerCase();
+    let el = null;
+    if (idPart) {
+        const candidates = document.querySelectorAll('input[id]');
+        for (let i = 0; i < candidates.length; i++) {
+            const id = candidates[i].id || '';
+            if (id.indexOf(idPart) >= 0) {
+                el = candidates[i];
+                break;
+            }
+        }
+    }
+    if (!el && labelNeedle) {
+        const labels = [...document.querySelectorAll('label')];
+        const lbl = labels.find(l => {
+            const t = (l.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            return t.includes(labelNeedle);
+        });
+        if (lbl) {
+            const fid = lbl.getAttribute('for');
+            if (fid) el = document.getElementById(fid);
+        }
+    }
+    if (!el && labelNeedle) {
+        const inputs = document.querySelectorAll('input[role="combobox"]');
+        for (let i = 0; i < inputs.length; i++) {
+            const al = (inputs[i].getAttribute('aria-label') || '').toLowerCase();
+            const ph = (inputs[i].getAttribute('placeholder') || '').toLowerCase();
+            if (al.includes(labelNeedle) || ph.includes(labelNeedle)) {
+                el = inputs[i];
+                break;
+            }
+        }
+    }
+    if (!el || el.tagName !== 'INPUT') {
+        return JSON.stringify({found: false});
+    }
+    el.scrollIntoView({block: 'center'});
+    el.focus();
+    try { el.click(); } catch (e) {}
+    return JSON.stringify({found: true, id: el.id || ''});
+}"""
+
+
+def _linkedin_location_typeahead_strings(profile: ApplicantProfile) -> tuple[str | None, str | None]:
+    """(type_prefix_for_cdp_typing, pick_target_for_force_click_scoring)."""
+    loc = (profile.location or "").strip()
+    city = (profile.city or "").strip()
+    if not loc and not city:
+        return None, None
+    if loc:
+        pick = loc
+        prefix = loc.split(",")[0].strip()
+    else:
+        pick = f"{city}, Türkiye"
+        prefix = city
+    prefix = prefix.strip()
+    if len(prefix) < 2:
+        prefix = (city or loc)[:24]
+    if len(prefix) < 2:
+        return None, None
+    return prefix[:24], pick
+
+
 # Appended once per run when ActionLoopDetector.get_nudge_message() is set (browser-use loop nudge).
 AGENT_LOOP_MID_RUN_PROMPT = """
 LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat the same failing call.
@@ -47,7 +345,7 @@ LOOP RECOVERY — Same steps without progress. Change strategy; do not repeat th
 - If force_click failed: retry once with the real on-screen string, then try click(index=...) from a fresh element list, or scroll the modal/form so the control is in view; dismiss cookie/consent bars if they cover the target.
 - Do not use a raw number as a CSS selector (e.g. [21917]); use numeric index only with the standard click action as documented.
 - Same tool + same parameters: at most twice, then switch tool, target, or scroll. After ~4 attempts on one field, SKIP that field and continue.
-- LinkedIn Location (city): if stuck on input() loops — stop typing; wait(2); force_click_element with profile Location line or click(index) on [role=option]. Never send_keys ArrowDown/Enter on that field.
+- LinkedIn typeahead comboboxes (Location, School, …): prefer fill_linkedin_typeahead(...); if stuck — wait(2); force_click_element or click(index) on [role=option]. Never send_keys ArrowDown/Enter on those fields.
 - Intl phone: pick country (+90 etc.) first, then digits in the number box; placeholder/example emails must be cleared and replaced with the real address.
 - Submit/Next errors: read ALL messages; fix each named field — not only the last one you touched.
 - If the visible page shows CAPTCHA, Cloudflare "Verify", or "Just a moment...", stop looping and report CAPTCHA_BLOCKED per your instructions.
@@ -177,13 +475,38 @@ class AgentAdapter(BaseAdapter):
                         "Type a short city keyword, then pick the matching row from the list (see steps).\n"
                     )
                 _kw = repr(_city) if _city else "the city keyword"
+                _pref, _tpick = _linkedin_location_typeahead_strings(profile)
+                _loc_example = ""
+                if _pref and _tpick:
+                    _cfb = (profile.city or "").strip()
+                    _fb_part = ""
+                    if _cfb and _cfb.lower() not in _tpick.lower():
+                        _fb_part = f", pick_fallback={_cfb!r}"
+                    _loc_example = (
+                        f"PREFERRED for Location (city): fill_linkedin_typeahead("
+                        f"label_substring='Location (city)', search_text={_pref!r}, "
+                        f"option_match_text={_tpick!r}, id_contains='location-GEO-LOCATION'{_fb_part}). "
+                        f"For School, Company, or other typeaheads: same tool with that field's label_substring, "
+                        f"a short search_text, option_match_text = exact visible row, and id_contains if the id "
+                        f"contains a stable fragment (inspect DevTools id= on the input).\n"
+                    )
+                else:
+                    _loc_example = (
+                        "PREFERRED for Location (city): fill_linkedin_typeahead("
+                        "label_substring='Location (city)', search_text=<short city prefix>, "
+                        "option_match_text=<full line e.g. 'Ankara, Türkiye'>, "
+                        "id_contains='location-GEO-LOCATION'). Set profile.location or profile.city. "
+                        "Other typeaheads: same parameters pattern with the correct label and id fragment.\n"
+                    )
                 linkedin_location_block = (
-                    f"\nLINKEDIN EASY APPLY — LOCATION (city) — MANDATORY SEQUENCE (loops if skipped):\n"
+                    f"\nLINKEDIN EASY APPLY — TYPEAHEAD FIELDS (Location, School, …) — MANDATORY SEQUENCE (loops if skipped):\n"
                     f"{_primary}"
-                    f"Country spelling: the suggestion list usually shows Turkish 'Türkiye', not English 'Turkey'. "
-                    f"Read the row text from the screenshot and use that exact string for force_click_element "
-                    f"(e.g. 'Ankara, Türkiye'). Do not assume English labels.\n"
-                    f"1) input(index=..., text={_kw}, clear=True) at most ONCE for this attempt.\n"
+                    f"{_loc_example}"
+                    f"Fallback manual sequence: Country spelling: the suggestion list usually shows Turkish "
+                    f"'Türkiye', not English 'Turkey'. Read the row from the screenshot and use that exact string "
+                    f"for force_click_element (e.g. 'Ankara, Türkiye').\n"
+                    f"1) input(index=..., text={_kw}, clear=True) at most ONCE for this attempt — OR skip if you "
+                    f"already used fill_linkedin_typeahead for that field.\n"
                     f"2) wait(seconds=2) — required so the suggestion list can render.\n"
                     f"3) Select a row: force_click_element(text=<exact visible line>) using the profile "
                     f"Location line or screenshot text, OR click(index=N) on a [role=option] / suggestion row "
@@ -274,7 +597,8 @@ class AgentAdapter(BaseAdapter):
                 f"BROWSER-USE BEST PRACTICES (align with library docs / AGENTS.md):\n"
                 f"- Be SPECIFIC: think in concrete steps (navigate → act → verify screenshot), not open-ended goals.\n"
                 f"- NAME actions explicitly when choosing the next step: navigate, click, input, scroll, "
-                f"send_keys, select_dropdown, force_click_element, fill_text_field, done — match what the runtime exposes.\n"
+                f"send_keys, select_dropdown, force_click_element, fill_linkedin_typeahead, "
+                f"fill_text_field, done — match what the runtime exposes.\n"
                 f"- SCREENSHOT + element list are ground truth: trust visible labels and current indices; "
                 f"indices renumber after every action — never reuse an old index for a new field.\n"
                 f"- KEYBOARD FALLBACK: on some sites, send_keys('ArrowDown') then send_keys('Enter') after "
@@ -321,7 +645,11 @@ class AgentAdapter(BaseAdapter):
                 f"FORM FILLING — WHICH TOOL TO USE:\n"
                 f"- fill_text_field(label=..., value=...): For plain text inputs. Finds fields by label. "
                 f"Also works for date, number, contenteditable, and native <select>.\n"
-                f"- 'input' + option pick: For dropdown/autocomplete/typeahead. Type with 'input' → see suggestions → "
+                f"- fill_linkedin_typeahead(label_substring, search_text, option_match_text, id_contains=..., "
+                f"pick_fallback=...): LinkedIn Easy Apply — every single-typeahead combobox (Location, School, "
+                f"Company, …). One-shot: find field + type + wait + pick. Use before fill_text_field or input() "
+                f"loops on comboboxes.\n"
+                f"- 'input' + option pick: For other dropdown/autocomplete/typeahead. Type with 'input' → see suggestions → "
                 f"pick with force_click_element(text='...') OR click(index=...) on the row from the current list. "
                 f"Unindexed generic click is unreliable on React; indexed click is OK. Do NOT use fill_text_field on comboboxes.\n"
                 f"- native_select(label=..., value=...): For native HTML <select> elements.\n"
@@ -331,10 +659,10 @@ class AgentAdapter(BaseAdapter):
                 f"Do NOT pass selector=. Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
                 f"- upload_file: For file upload fields.\n\n"
-                f"LINKEDIN EASY APPLY — LOCATION / SCHOOL TYPEAHEAD (CRITICAL):\n"
-                f"- 'Location (city)', school name, and similar fields are usually comboboxes (role=combobox), "
-                f"NOT plain text. fill_text_field will refuse them — use: type a few letters with 'input', wait "
-                f"for the list, then click the correct row.\n"
+                f"LINKEDIN EASY APPLY — LOCATION / SCHOOL / COMPANY TYPEAHEAD (CRITICAL):\n"
+                f"- These single-typeahead fields are comboboxes (role=combobox), NOT plain text. "
+                f"PREFERRED: fill_linkedin_typeahead(...) for all of these. "
+                f"Fallback: type a few letters with 'input', wait for the list, then click the correct row.\n"
                 f"- After suggestions appear, PREFERRED order: (1) click(index=...) on the [role=option] line "
                 f"that matches the city/school (see browser list — this is reliable on LinkedIn). "
                 f"(2) force_click_element(text='exact line as shown', e.g. 'Ankara, Türkiye'). "
@@ -460,6 +788,79 @@ class AgentAdapter(BaseAdapter):
 
             tools = Tools()
 
+            async def _force_click_evaluate_and_cdp(
+                browser_session,
+                page,
+                text: str,
+                selector: str = "",
+                log_name: str = "force_click_element",
+            ):
+                import json as _json
+
+                raw = await page.evaluate(FORCE_CLICK_FIND_JS, {"selector": selector, "text": text})
+                info = _json.loads(raw) if isinstance(raw, str) else raw
+                if not info or "error" in info:
+                    msg = info.get("error", "Unknown error") if info else "No result"
+                    logger.warning("%s: %s", log_name, msg)
+                    return ActionResult(extracted_content=str(msg))
+
+                x, y = info["x"], info["y"]
+                tag = info.get("tag", "?")
+                role = info.get("role", "?")
+                logger.info(
+                    "%s: found %s[role=%s] at (%d,%d), sending CDP click",
+                    log_name,
+                    tag,
+                    role,
+                    x,
+                    y,
+                )
+
+                try:
+                    cdp_session = await browser_session.get_or_create_cdp_session()
+                    client = cdp_session.cdp_client
+                    sid = cdp_session.session_id
+
+                    for event_type in ("mousePressed", "mouseReleased"):
+                        await client.send_raw(
+                            "Input.dispatchMouseEvent",
+                            {
+                                "type": event_type,
+                                "x": x,
+                                "y": y,
+                                "button": "left",
+                                "clickCount": 1,
+                            },
+                            session_id=sid,
+                        )
+                except Exception as e:
+                    logger.warning("CDP click failed (%s), falling back to JS dispatch", e)
+                    fallback_js = """(args) => {
+                        const el = document.elementFromPoint(args.x, args.y);
+                        if (!el) return 'No element at coordinates';
+                        el.click();
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        return 'JS fallback clicked: ' + el.tagName;
+                    }"""
+                    fb_result = await page.evaluate(fallback_js, {"x": x, "y": y})
+                    return ActionResult(extracted_content=str(fb_result))
+
+                import asyncio as _aio
+
+                await _aio.sleep(0.3)
+
+                verify_js = """(args) => {
+                    const el = document.elementFromPoint(args.x, args.y);
+                    if (!el) return 'no element at point';
+                    const radio = el.closest('[role="radio"], [role="checkbox"]');
+                    if (radio) return 'aria-checked=' + radio.getAttribute('aria-checked');
+                    return 'clicked ' + el.tagName + ' (no aria role)';
+                }"""
+                verify = await page.evaluate(verify_js, {"x": x, "y": y})
+                result_msg = f"CDP clicked {tag}[role={role}] '{info.get('text','')}' → {verify}"
+                logger.info("%s result: %s", log_name, result_msg)
+                return ActionResult(extracted_content=result_msg)
+
             @tools.action(description=(
                 "Fetch the LinkedIn email verification code. "
                 "Call this when LinkedIn asks for a verification code sent to email. "
@@ -493,305 +894,9 @@ class AgentAdapter(BaseAdapter):
                 if not page:
                     return ActionResult(extracted_content="No active page found")
 
-                find_js = """(args) => {
-                    let el;
-                    const t = (args.text || '').trim();
-                    const sel = (args.selector || '').trim();
-
-                    // LinkedIn / React typeaheads often render suggestions inside open Shadow DOM.
-                    // document.querySelectorAll does not pierce shadow roots — this does.
-                    const deepQuerySelectorAll = (selectorsCsv) => {
-                        const sels = selectorsCsv.split(",").map((s) => s.trim()).filter(Boolean);
-                        const seen = new Set();
-                        const out = [];
-                        const addFrom = (root) => {
-                            if (!root || !root.querySelectorAll) return;
-                            for (const oneSel of sels) {
-                                try {
-                                    root.querySelectorAll(oneSel).forEach((n) => {
-                                        if (!seen.has(n)) {
-                                            seen.add(n);
-                                            out.push(n);
-                                        }
-                                    });
-                                } catch (e) { /* invalid sel */ }
-                            }
-                            const desc = root.querySelectorAll("*");
-                            for (let i = 0; i < desc.length; i++) {
-                                const n = desc[i];
-                                if (n.shadowRoot) addFrom(n.shadowRoot);
-                            }
-                        };
-                        addFrom(document);
-                        return out;
-                    };
-
-                    if (t) {
-                        // --- PHASE 1: label-based search (best for radios/checkboxes) ---
-                        const labels = [...document.querySelectorAll('label')];
-                        const exactLabel = labels.find(l =>
-                            l.textContent.trim() === t && l.offsetParent !== null
-                        );
-                        const partialLabel = !exactLabel && labels.find(l =>
-                            l.textContent.trim().includes(t) && l.offsetParent !== null
-                        );
-                        const matchLabel = exactLabel || partialLabel;
-                        if (matchLabel) {
-                            const forId = matchLabel.getAttribute('for');
-                            if (forId) {
-                                const inp = document.getElementById(forId);
-                                if (inp && (inp.type === 'radio' || inp.type === 'checkbox')) {
-                                    const r = inp.getBoundingClientRect();
-                                    const style = getComputedStyle(inp);
-                                    const hidden = r.width < 5 || r.height < 5
-                                        || style.opacity === '0' || style.visibility === 'hidden';
-                                    el = hidden ? matchLabel : inp;
-                                } else {
-                                    el = matchLabel;
-                                }
-                            }
-                            if (!el) el = matchLabel;
-                        }
-
-                        // --- PHASE 2: scoped selector search ---
-                        if (!el) {
-                            let scopeNodes;
-                            if (sel) {
-                                try {
-                                    scopeNodes = [...document.querySelectorAll(sel)];
-                                } catch (e) {
-                                    scopeNodes = [...document.querySelectorAll('*')];
-                                }
-                            } else {
-                                scopeNodes = [...document.querySelectorAll('*')];
-                            }
-                            const scope = scopeNodes;
-                            el = scope.find(e =>
-                                e.textContent.trim() === t
-                                && e.offsetParent !== null
-                                && e.children.length === 0
-                            );
-                            if (!el) el = scope.find(e =>
-                                e.textContent.trim() === t
-                                && e.offsetParent !== null
-                            );
-                            if (!el) el = scope.find(e =>
-                                e.innerText && e.innerText.includes(t)
-                                && e.offsetParent !== null
-                                && e.children.length === 0
-                            );
-                            if (!el) {
-                                const shorter = t.substring(0, 30);
-                                el = scope.find(e =>
-                                    e.textContent.includes(shorter)
-                                    && e.offsetParent !== null
-                                    && e.children.length === 0
-                                );
-                            }
-                        }
-
-                        // --- PHASE 2.5: listbox/menu options (LinkedIn Easy Apply) ---
-                        // Fixed-position dropdowns often have offsetParent === null — do NOT use offsetParent here.
-                        if (!el && t) {
-                            const trFold = (s) => {
-                                let x = (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-                                const map = {
-                                    "ı": "i", "İ": "i", "i̇": "i",
-                                    "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c",
-                                    "â": "a", "î": "i", "û": "u",
-                                };
-                                for (const [k, v] of Object.entries(map)) {
-                                    x = x.split(k).join(v);
-                                }
-                                try {
-                                    x = x.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-                                } catch (e) { /* ignore */ }
-                                return x;
-                            };
-                            // English "Turkey" vs Turkish "Türkiye" in location rows (LinkedIn lists Türkiye).
-                            const foldLoc = (s) => {
-                                let x = trFold(s);
-                                x = x.replace(/\bturkey\b/g, "turkiye");
-                                return x;
-                            };
-                            const optVisible = (o) => {
-                                const r = o.getBoundingClientRect();
-                                const st = getComputedStyle(o);
-                                return r.width >= 1 && r.height >= 1
-                                    && st.visibility !== "hidden"
-                                    && st.display !== "none"
-                                    && parseFloat(st.opacity || "1") > 0.05;
-                            };
-                            const txt = (o) => (o.innerText || o.textContent || "");
-                            const optSel = [
-                                '[role="option"]',
-                                '[role="menuitemcheckbox"]',
-                                '[role="menuitem"]',
-                                '[id^="basic-result-"]',
-                                'li[role="presentation"]',
-                                '[class*="search-typeahead-v2"] [role="option"]',
-                                '[class*="typeahead"] [role="option"]',
-                                '[class*="jobs-easy-apply"] [role="option"]',
-                                '[class*="artdeco-typeahead"] [role="option"]',
-                                'div[class*="typeahead-result"]',
-                            ].join(", ");
-                            const opts = deepQuerySelectorAll(optSel).filter(optVisible);
-                            const nt = foldLoc(t);
-                            const parts = nt.split(",").map((p) => p.trim()).filter(Boolean);
-                            const scoreOpt = (o) => {
-                                const s = foldLoc(txt(o));
-                                if (s === nt) return 100;
-                                if (s.includes(nt) && nt.length >= 4) return 80;
-                                if (parts.length >= 2
-                                    && parts.every((p) => p.length >= 2 && s.includes(p))) return 70;
-                                if (parts.length && parts[0].length >= 3 && s.includes(parts[0])) return 50;
-                                return 0;
-                            };
-                            let best = null;
-                            let bestScore = 0;
-                            for (const o of opts) {
-                                const sc = scoreOpt(o);
-                                if (sc > bestScore) { bestScore = sc; best = o; }
-                            }
-                            if (bestScore >= 50) el = best;
-                        }
-
-                        // --- PHASE 3: broad fallback (leaf elements first) ---
-                        if (!el) {
-                            const allEls = [...document.querySelectorAll('*')];
-                            const textEl = allEls.find(e =>
-                                e.children.length === 0
-                                && e.innerText && e.innerText.includes(t)
-                                && e.offsetParent !== null
-                            ) || allEls.find(e =>
-                                e.innerText && e.innerText.includes(t)
-                                && e.offsetParent !== null
-                            );
-                            if (textEl) {
-                                const cb = textEl.closest('label, [role="checkbox"], [role="radio"]');
-                                if (cb) el = cb;
-                                else {
-                                    const parent = textEl.parentElement;
-                                    if (parent) {
-                                        const nearCb = parent.querySelector(
-                                            'input[type="checkbox"], input[type="radio"], [role="checkbox"]'
-                                        );
-                                        if (nearCb) el = nearCb;
-                                        else el = textEl;
-                                    } else el = textEl;
-                                }
-                            }
-                        }
-                    }
-                    if (!el && sel && !t) {
-                        let matches;
-                        try {
-                            matches = document.querySelectorAll(sel);
-                        } catch (e) {
-                            matches = [];
-                        }
-                        if (matches.length === 1) el = matches[0];
-                    }
-                    if (!el) return JSON.stringify({error: 'Element not found for text="' + t + '"'});
-
-                    // --- Resolve click target ---
-                    let target = el;
-
-                    // If we landed on a hidden radio/checkbox input, click its label instead
-                    if (el.tagName === 'INPUT'
-                        && (el.type === 'radio' || el.type === 'checkbox')) {
-                        const r = el.getBoundingClientRect();
-                        const style = getComputedStyle(el);
-                        const hidden = r.width < 5 || r.height < 5
-                            || style.opacity === '0' || style.visibility === 'hidden';
-                        if (hidden && el.id) {
-                            const lbl = document.querySelector('label[for="' + el.id + '"]');
-                            if (lbl) target = lbl;
-                        }
-                    }
-
-                    // Walk up to find ARIA radio/checkbox/option container
-                    let radio = target.closest('[role="radio"], [role="checkbox"], [role="option"]');
-                    if (!radio) {
-                        for (let p = target.parentElement; p && p !== document.body; p = p.parentElement) {
-                            const r = p.getAttribute('role');
-                            if (r === 'radio' || r === 'checkbox' || r === 'option') {
-                                radio = p; break;
-                            }
-                        }
-                    }
-                    if (radio) target = radio;
-
-                    target.scrollIntoView({block: 'center'});
-                    const rect = target.getBoundingClientRect();
-                    return JSON.stringify({
-                        x: Math.round(rect.x + rect.width / 2),
-                        y: Math.round(rect.y + rect.height / 2),
-                        tag: target.tagName,
-                        role: target.getAttribute('role') || 'none',
-                        text: t.slice(0, 50),
-                        ariaChecked: target.getAttribute('aria-checked')
-                    });
-                }"""
-                import json as _json
-                raw = await page.evaluate(find_js, {"selector": selector, "text": text})
-                info = _json.loads(raw) if isinstance(raw, str) else raw
-                if not info or "error" in info:
-                    msg = info.get("error", "Unknown error") if info else "No result"
-                    logger.warning("force_click_element: %s", msg)
-                    return ActionResult(extracted_content=str(msg))
-
-                x, y = info["x"], info["y"]
-                tag = info.get("tag", "?")
-                role = info.get("role", "?")
-                logger.info(
-                    "force_click_element: found %s[role=%s] at (%d,%d), sending CDP click",
-                    tag, role, x, y,
+                return await _force_click_evaluate_and_cdp(
+                    browser_session, page, text, selector, "force_click_element"
                 )
-
-                try:
-                    cdp_session = await browser_session.get_or_create_cdp_session()
-                    client = cdp_session.cdp_client
-                    sid = cdp_session.session_id
-
-                    for event_type in ("mousePressed", "mouseReleased"):
-                        await client.send_raw(
-                            "Input.dispatchMouseEvent",
-                            {
-                                "type": event_type,
-                                "x": x,
-                                "y": y,
-                                "button": "left",
-                                "clickCount": 1,
-                            },
-                            session_id=sid,
-                        )
-                except Exception as e:
-                    logger.warning("CDP click failed (%s), falling back to JS dispatch", e)
-                    fallback_js = """(args) => {
-                        const el = document.elementFromPoint(args.x, args.y);
-                        if (!el) return 'No element at coordinates';
-                        el.click();
-                        el.dispatchEvent(new Event('change', {bubbles: true}));
-                        return 'JS fallback clicked: ' + el.tagName;
-                    }"""
-                    fb_result = await page.evaluate(fallback_js, {"x": x, "y": y})
-                    return ActionResult(extracted_content=str(fb_result))
-
-                import asyncio as _aio
-                await _aio.sleep(0.3)
-
-                verify_js = """(args) => {
-                    const el = document.elementFromPoint(args.x, args.y);
-                    if (!el) return 'no element at point';
-                    const radio = el.closest('[role="radio"], [role="checkbox"]');
-                    if (radio) return 'aria-checked=' + radio.getAttribute('aria-checked');
-                    return 'clicked ' + el.tagName + ' (no aria role)';
-                }"""
-                verify = await page.evaluate(verify_js, {"x": x, "y": y})
-                result_msg = f"CDP clicked {tag}[role={role}] '{info.get('text','')}' → {verify}"
-                logger.info("force_click_element result: %s", result_msg)
-                return ActionResult(extracted_content=result_msg)
 
             _FIND_INPUT_JS = """(args) => {
                 const label = (args.label || '').trim();
@@ -1084,6 +1189,96 @@ class AgentAdapter(BaseAdapter):
                         await _aio.sleep(delay_ms / 1000)
 
             @tools.action(description=(
+                "LinkedIn Easy Apply: fills any single-typeahead combobox (role=combobox) in one step — Location "
+                "(city), School, Company, etc. Same tool for all. Finds the input by id_contains (fragment of the "
+                "dynamic id, e.g. 'location-GEO-LOCATION') and/or label_substring (visible label, case-insensitive). "
+                "Types search_text with trusted key events, waits, then CDP-clicks the row matching option_match_text "
+                "(full visible line). Prefer over fill_text_field and over input()+ArrowDown/Enter. "
+                "Optional pick_fallback if the first match fails (e.g. city-only vs full 'City, Country' line)."
+            ))
+            async def fill_linkedin_typeahead(
+                browser_session,
+                label_substring: str = "",
+                search_text: str = "",
+                option_match_text: str = "",
+                id_contains: str = "",
+                pick_fallback: str = "",
+            ) -> ActionResult:
+                page = await browser_session.get_current_page()
+                if not page:
+                    return ActionResult(extracted_content="No active page found")
+                label_substring = (label_substring or "").strip()
+                search_text = (search_text or "").strip()
+                option_match_text = (option_match_text or "").strip()
+                id_contains = (id_contains or "").strip()
+                pick_fallback = (pick_fallback or "").strip()
+                if not label_substring and not id_contains:
+                    return ActionResult(
+                        extracted_content=(
+                            "fill_linkedin_typeahead: pass label_substring (e.g. 'Location (city)' or 'School') "
+                            "and/or id_contains (e.g. 'location-GEO-LOCATION')."
+                        )
+                    )
+                if not search_text or not option_match_text:
+                    return ActionResult(
+                        extracted_content="fill_linkedin_typeahead: search_text and option_match_text are required."
+                    )
+                import json as _json
+                import asyncio as _aio
+
+                raw = await page.evaluate(
+                    LINKEDIN_TYPEAHEAD_INPUT_FIND_JS,
+                    {"labelSubstring": label_substring, "idContains": id_contains},
+                )
+                info = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                if not info.get("found"):
+                    return ActionResult(
+                        extracted_content=(
+                            f"fill_linkedin_typeahead: combobox not found for "
+                            f"label={label_substring!r} id_contains={id_contains!r} (open Easy Apply modal?)."
+                        )
+                    )
+                _id = (info.get("id") or "").strip()
+                if _id:
+                    await page.evaluate(
+                        """(id) => {
+                            const el = document.getElementById(id);
+                            if (el) { el.focus(); try { el.click(); } catch (e) {} }
+                        }""",
+                        _id,
+                    )
+                await _cdp_type_char_by_char(browser_session, page, search_text, delay_ms=38, clear=True)
+                await _aio.sleep(2.2)
+                log = "fill_linkedin_typeahead"
+                res = await _force_click_evaluate_and_cdp(
+                    browser_session, page, option_match_text, "", log
+                )
+                out = str(res.extracted_content or "")
+                bad = "not found for text" in out.lower() or "element not found" in out.lower()
+                if not bad:
+                    return res
+                if "," in option_match_text:
+                    alt = option_match_text.split(",")[0].strip()
+                    if alt and alt.lower() != option_match_text.lower():
+                        await _aio.sleep(0.5)
+                        res = await _force_click_evaluate_and_cdp(
+                            browser_session, page, alt, "", f"{log}_retry_segment"
+                        )
+                        out2 = str(res.extracted_content or "")
+                        bad2 = "not found for text" in out2.lower() or "element not found" in out2.lower()
+                        if not bad2:
+                            return res
+                if pick_fallback and pick_fallback.lower() not in (
+                    option_match_text.lower(),
+                    (option_match_text.split(",")[0].strip().lower() if "," in option_match_text else ""),
+                ):
+                    await _aio.sleep(0.5)
+                    return await _force_click_evaluate_and_cdp(
+                        browser_session, page, pick_fallback, "", f"{log}_fallback"
+                    )
+                return res
+
+            @tools.action(description=(
                 "Fill a text input field by its visible label text (e.g. 'Soyadı', 'E-posta'). "
                 "Finds the field by label, clears it, and types the value via CDP (trusted events). "
                 "Works with plain inputs, textareas, contenteditable, date/number inputs, "
@@ -1122,11 +1317,12 @@ class AgentAdapter(BaseAdapter):
                     if info.get("isCombobox"):
                         msg = (
                             "This field is a combobox/autocomplete (LinkedIn city, school, etc.). "
-                            "Do NOT use fill_text_field. Instead: (1) focus the field; (2) use the "
-                            "'input' action to type a short search string; (3) when suggestions appear, "
-                            "use click(index=N) on the matching [role=option] row from the element list, "
-                            "OR force_click_element with the EXACT visible line text. "
-                            "If force_click_element fails twice, always use click(index) on the option."
+                            "Do NOT use fill_text_field. On LinkedIn Easy Apply use fill_linkedin_typeahead(...) "
+                            "with label_substring, search_text, option_match_text, and optional id_contains. "
+                            "Otherwise: (1) focus; "
+                            "(2) 'input' with a short search string; (3) click(index=N) on [role=option] OR "
+                            "force_click_element with the EXACT visible line. "
+                            "If force_click_element fails twice, use click(index) on the option."
                         )
                         logger.info("fill_text_field: rejected combobox label=%r", label)
                         return ActionResult(extracted_content=msg)
