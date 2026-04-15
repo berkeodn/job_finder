@@ -13,6 +13,9 @@ on:
 jobs:
   auto-apply:
     runs-on: self-hosted
+    # Same path as your dev clone: sync+ingest updates jobs.db here; apply seeds GHA workspace from it.
+    env:
+      JOB_FINDER_DESKTOP: "C:\Users\Berke\Desktop\job_finder"
     defaults:
       run:
         shell: powershell
@@ -39,7 +42,7 @@ jobs:
 
       - name: Copy and clean LinkedIn session if available
         run: |
-          $src = "C:\Users\Berke\Desktop\job_finder\linkedin_session.json"
+          $src = Join-Path $env:JOB_FINDER_DESKTOP "linkedin_session.json"
           if (Test-Path $src) {
             Copy-Item $src -Destination "linkedin_session.json" -Force
             venv\Scripts\Activate.ps1
@@ -47,6 +50,21 @@ jobs:
             Write-Host "LinkedIn session loaded and cleaned"
           } else {
             Write-Host "No saved session found - login will be required"
+          }
+
+      # Same machine as dev: use jobs.db maintained by scripts/sync_then_ingest (artifact + Telegram).
+      # If we copied it, skip artifact download — otherwise download would overwrite this file.
+      - name: Seed jobs.db from desktop clone
+        id: desktop_jobs_db
+        run: |
+          $src = Join-Path $env:JOB_FINDER_DESKTOP "jobs.db"
+          if (Test-Path $src) {
+            Copy-Item -LiteralPath $src -Destination (Join-Path $env:GITHUB_WORKSPACE "jobs.db") -Force
+            Write-Host "Seeded workspace jobs.db from $src"
+            "from_desktop=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No desktop jobs.db at $src — will download jobs-db artifact next."
+            "from_desktop=false" >> $env:GITHUB_OUTPUT
           }
 
       - name: Backup local DB apply statuses
@@ -58,8 +76,9 @@ jobs:
             Write-Host "No local DB yet"
           }
 
-      # Latest jobs-db from any workflow (telegram-ingest has apply_status=approved; scrape alone does not)
+      # Skipped when desktop jobs.db was copied — that DB already includes latest scrape merge + Telegram ingest.
       - name: Download latest jobs.db artifact
+        if: ${{ steps.desktop_jobs_db.outputs.from_desktop != 'true' }}
         uses: dawidd6/action-download-artifact@v6
         with:
           name: jobs-db
