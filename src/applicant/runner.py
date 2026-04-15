@@ -38,6 +38,23 @@ def _unwrap_linkedin_redirect(url: str) -> str:
     return url
 
 
+def _looks_like_already_applied(message: str) -> bool:
+    """LinkedIn / ATS says the user already applied; treat as done, not a retryable failure."""
+    m = (message or "").lower()
+    return any(
+        phrase in m
+        for phrase in (
+            "already applied",
+            "already submitted",
+            "applied ",  # 'Applied 2 days ago'
+            "başvurdunuz",
+            "başvurunuz gönderildi",
+            "you've applied",
+            "you have applied",
+        )
+    )
+
+
 def _pick_adapter(url: str) -> str:
     """Choose the best adapter based on the URL domain."""
     url_lower = url.lower()
@@ -88,10 +105,35 @@ async def _apply_to_job(
         )
 
     if not result.success and "job_closed" in result.message.lower():
+        # Listing gone vs "you already applied" — already-applied counts as applied (not closed).
+        if _looks_like_already_applied(result.message):
+            job.apply_status = "applied"
+            job.applied_at = datetime.now(timezone.utc)
+            session.commit()
+            logger.info(
+                "Already applied on site (job_closed text): %s @ %s", job.title, job.company
+            )
+            return ApplyResult(
+                success=True,
+                message="already_applied_on_site",
+                adapter_used=result.adapter_used,
+            )
         job.apply_status = "closed"
         session.commit()
         logger.info("Job closed/expired: %s @ %s", job.title, job.company)
         return result
+
+    # Agent said failure but page shows prior application — same outcome as success for the DB.
+    if not result.success and _looks_like_already_applied(result.message):
+        job.apply_status = "applied"
+        job.applied_at = datetime.now(timezone.utc)
+        session.commit()
+        logger.info("Marked applied (already applied on site): %s @ %s", job.title, job.company)
+        return ApplyResult(
+            success=True,
+            message="already_applied_on_site",
+            adapter_used=result.adapter_used,
+        )
 
     # Update DB
     if result.success:
