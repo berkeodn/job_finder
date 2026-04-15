@@ -9,8 +9,10 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
+from sqlalchemy import func
+
 from config import settings
-from src.db.database import get_session, init_db
+from src.db.database import engine, get_session, init_db
 from src.db.models import Job
 from src.notifier.telegram import send_alert
 
@@ -158,17 +160,30 @@ async def run_applicant() -> None:
 
     logger.info("=== Auto-Apply Runner Starting ===")
     init_db()
+    logger.info("Using SQLite: %s", engine.url)
     profile = load_applicant_profile()
     session = get_session()
 
+    # trim() avoids missing rows if the column ever has accidental whitespace
     pending_jobs = (
         session.query(Job)
-        .filter(Job.apply_status == "approved")
+        .filter(func.trim(Job.apply_status) == "approved")
         .all()
     )
 
     if not pending_jobs:
-        logger.info("No pending applications (apply_status=approved in DB)")
+        total = session.query(Job).count()
+        by_status = dict(
+            session.query(Job.apply_status, func.count(Job.id))
+            .group_by(Job.apply_status)
+            .all()
+        )
+        logger.info(
+            "No pending applications (trim(apply_status) == 'approved'). "
+            "total_jobs=%s by_status=%s",
+            total,
+            by_status,
+        )
         session.close()
         return
 
@@ -182,7 +197,12 @@ async def run_applicant() -> None:
     remaining_budget = max(0, settings.max_daily_applications - applied_today)
 
     if remaining_budget == 0:
-        logger.warning("Daily application limit reached (%d)", settings.max_daily_applications)
+        logger.warning(
+            "Daily application limit reached: %d/%d applied today (UTC). "
+            "Pending approved jobs wait until UTC midnight or higher max_daily_applications.",
+            applied_today,
+            settings.max_daily_applications,
+        )
         session.close()
         return
 
