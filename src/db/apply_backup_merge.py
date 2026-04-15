@@ -14,9 +14,11 @@ from sqlalchemy.orm import Session
 
 from src.db.models import Job
 
-# Do not clobber a fresh Telegram re-queue with stale terminal states from the same machine.
+# Do not clobber a fresh Telegram approval with stale *failure* states from the same machine.
+# "applied" must NOT be here: after artifact overlay the row is often approved (from ingest) while
+# the backup still has applied from the last runner — we must merge to applied or the runner retries.
 _SKIP_WHEN_CURRENT_APPROVED = frozenset(
-    {"failed", "captcha", "closed", "not_applied", "", "applied"}
+    {"failed", "captcha", "closed", "not_applied", ""}
 )
 
 
@@ -27,7 +29,8 @@ def restore_apply_statuses_from_backup(
     """
     Apply backed-up rows onto the current DB (post-artifact). If the DB already has
     apply_status='approved' for a job (e.g. from telegram-ingest) and the backup would
-    replace it with a stale local outcome, that row is skipped.
+    replace it with a stale failed/captcha/closed state, that row is skipped. Backup
+    status 'applied' is always merged so jobs do not stay stuck as approved after a real apply.
     """
     if not os.path.exists(backup_path):
         return "restore: no _apply_backup.json"
