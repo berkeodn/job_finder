@@ -34,6 +34,9 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
     base = TELEGRAM_API.format(token=settings.telegram_bot_token)
     total = 0
     batches = 0
+    # One Telegram button tap can produce duplicate updates (queued retries, double delivery).
+    # Count and apply DB changes once per job_id per drain.
+    seen_apply_job_ids: set[str] = set()
 
     while batches < _MAX_DRAIN_BATCHES:
         batches += 1
@@ -72,10 +75,20 @@ def drain_telegram_callbacks_to_db(session: "Session") -> int:
 
             job_id = cb_data.split(":", 1)[1]
             cb_qid = cb["id"]
+
+            if job_id in seen_apply_job_ids:
+                answer_callback(cb_qid, "Already queued.")
+                logger.info(
+                    "Ingest: duplicate apply callback for job_id=%s (ignored)",
+                    job_id,
+                )
+                continue
+
             job = session.query(Job).filter(Job.job_id == job_id).first()
             if job:
                 job.apply_status = "approved"
                 session.commit()
+                seen_apply_job_ids.add(job_id)
                 answer_callback(cb_qid, "Queued — applying on schedule.")
                 total += 1
                 logger.info("Ingest: queued apply for %s @ %s", job.title, job.company)
