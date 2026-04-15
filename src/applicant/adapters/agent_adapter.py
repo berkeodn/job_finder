@@ -180,6 +180,9 @@ class AgentAdapter(BaseAdapter):
                 linkedin_location_block = (
                     f"\nLINKEDIN EASY APPLY — LOCATION (city) — MANDATORY SEQUENCE (loops if skipped):\n"
                     f"{_primary}"
+                    f"Country spelling: the suggestion list usually shows Turkish 'Türkiye', not English 'Turkey'. "
+                    f"Read the row text from the screenshot and use that exact string for force_click_element "
+                    f"(e.g. 'Ankara, Türkiye'). Do not assume English labels.\n"
                     f"1) input(index=..., text={_kw}, clear=True) at most ONCE for this attempt.\n"
                     f"2) wait(seconds=2) — required so the suggestion list can render.\n"
                     f"3) Select a row: force_click_element(text=<exact visible line>) using the profile "
@@ -337,7 +340,8 @@ class AgentAdapter(BaseAdapter):
                 f"(2) force_click_element(text='exact line as shown', e.g. 'Ankara, Türkiye'). "
                 f"(3) If the UI uses a native <select> for email, use select_dropdown.\n"
                 f"- Do not type the full city string 10+ times: if the list is visible, pick by index or "
-                f"force_click once with exact screenshot text (watch Turkish characters: Türkiye vs Turkiye).\n"
+                f"force_click once with exact screenshot text (Turkish UI: 'Türkiye' in lists, not English 'Turkey'; "
+                f"also watch i/İ and Turkiye spelling).\n"
                 f"- The suggestion list is often inside Shadow DOM — if force_click_element says not found while "
                 f"the list is clearly visible, use click(index=...) on the first matching option line immediately.\n"
                 f"- Do NOT use send_keys for LinkedIn Location (city) — use wait(2) then force_click_element or "
@@ -477,6 +481,7 @@ class AgentAdapter(BaseAdapter):
                 "Provide the visible text of the element to click. "
                 "LinkedIn Easy Apply typeahead: after input+wait, pass the FULL suggestion line "
                 "(e.g. city + country as shown) — required for Location (city) comboboxes. "
+                "Omit selector= for suggestion rows (list may render outside the form). "
                 "This generates trusted browser events that React will process."
             ))
             async def force_click_element(
@@ -603,6 +608,12 @@ class AgentAdapter(BaseAdapter):
                                 } catch (e) { /* ignore */ }
                                 return x;
                             };
+                            // English "Turkey" vs Turkish "Türkiye" in location rows (LinkedIn lists Türkiye).
+                            const foldLoc = (s) => {
+                                let x = trFold(s);
+                                x = x.replace(/\bturkey\b/g, "turkiye");
+                                return x;
+                            };
                             const optVisible = (o) => {
                                 const r = o.getBoundingClientRect();
                                 const st = getComputedStyle(o);
@@ -625,10 +636,10 @@ class AgentAdapter(BaseAdapter):
                                 'div[class*="typeahead-result"]',
                             ].join(", ");
                             const opts = deepQuerySelectorAll(optSel).filter(optVisible);
-                            const nt = trFold(t);
+                            const nt = foldLoc(t);
                             const parts = nt.split(",").map((p) => p.trim()).filter(Boolean);
                             const scoreOpt = (o) => {
-                                const s = trFold(txt(o));
+                                const s = foldLoc(txt(o));
                                 if (s === nt) return 100;
                                 if (s.includes(nt) && nt.length >= 4) return 80;
                                 if (parts.length >= 2
