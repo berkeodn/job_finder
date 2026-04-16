@@ -9,6 +9,10 @@ from pathlib import Path
 MAX_AGENT_STEPS = 100
 AGENT_TIMEOUT_SECONDS = 1000
 
+# browser-use ActionLoopDetector: stop the run when either metric reaches this (see get_nudge_message thresholds).
+BROWSER_LOOP_STOP_REPETITION = 10
+BROWSER_LOOP_STOP_STAGNATION = 10
+
 from ..base import SCREENSHOT_DIR, ApplicantProfile, ApplyResult, BaseAdapter
 from ..browser.email_verifier import fetch_linkedin_verification_code
 from ..browser.stealth import SESSION_PATH, _LAUNCH_ARGS, _USER_AGENT
@@ -1801,6 +1805,7 @@ class AgentAdapter(BaseAdapter):
 
             agent_holder: list = [None]
             mid_run_prompt_injected: list = [False]
+            browser_loop_stop: list[str | None] = [None]
 
             def _step_cb_factory(watchdog: ActionLoopWatchdog):
                 def _on_agent_step(_browser_state_summary, model_output, _n_steps: int) -> None:
@@ -1854,6 +1859,28 @@ class AgentAdapter(BaseAdapter):
 
             def _should_stop_factory(watchdog: ActionLoopWatchdog):
                 async def _should_stop_loop() -> bool:
+                    ag = agent_holder[0]
+                    if ag is not None:
+                        ld = getattr(getattr(ag, "state", None), "loop_detector", None)
+                        if ld is not None:
+                            rep = int(getattr(ld, "max_repetition_count", 0) or 0)
+                            stag = int(getattr(ld, "consecutive_stagnant_pages", 0) or 0)
+                            if (
+                                rep >= BROWSER_LOOP_STOP_REPETITION
+                                or stag >= BROWSER_LOOP_STOP_STAGNATION
+                            ):
+                                if browser_loop_stop[0] is None:
+                                    browser_loop_stop[0] = (
+                                        f"repetition={rep}, stagnation={stag}"
+                                    )
+                                    logger.warning(
+                                        "Browser-use loop threshold (repetition>=%s or stagnation>=%s): %s; "
+                                        "stopping agent",
+                                        BROWSER_LOOP_STOP_REPETITION,
+                                        BROWSER_LOOP_STOP_STAGNATION,
+                                        browser_loop_stop[0],
+                                    )
+                                return True
                     if not settings.agent_loop_watchdog_enabled:
                         return False
                     if not settings.agent_loop_hard_stop:
@@ -1872,9 +1899,8 @@ class AgentAdapter(BaseAdapter):
                 max_steps=MAX_AGENT_STEPS,
                 loop_detection_enabled=True,
                 register_new_step_callback=_step_cb_factory(wd),
+                register_should_stop_callback=_should_stop_factory(wd),
             )
-            if settings.agent_loop_hard_stop:
-                agent_kwargs["register_should_stop_callback"] = _should_stop_factory(wd)
 
             agent = Agent(**agent_kwargs)
             agent_holder[0] = agent
@@ -1890,6 +1916,13 @@ class AgentAdapter(BaseAdapter):
             # browser-use may return None when the run stops on LLM 503 / consecutive failures — do not treat as success.
             final_result_str = ("" if raw_final is None else str(raw_final)).strip()
             logger.info("Agent completed: %s", raw_final if raw_final is not None else "(no final_result)")
+
+            if browser_loop_stop[0]:
+                return ApplyResult(
+                    success=False,
+                    message=f"browser_loop_detected:{browser_loop_stop[0]}",
+                    adapter_used=self.name,
+                )
 
             if result is None or loop_watchdog is None:
                 return ApplyResult(

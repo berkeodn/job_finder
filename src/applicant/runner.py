@@ -251,6 +251,21 @@ async def run_applicant() -> None:
                     f"Form filled but captcha blocked submission.",
                     buttons=[[{"text": "\U0001f4dd Apply Manually", "url": captcha_url}]],
                 )
+            elif result.message.startswith("browser_loop_detected:"):
+                detail = result.message.split("browser_loop_detected:", 1)[1].strip()
+                logger.warning(
+                    "Browser loop (repetition/stagnation): %s @ %s — %s",
+                    job.title,
+                    job.company,
+                    detail,
+                )
+                send_alert(
+                    f"\U0001f501 Loop detected (repetition/stagnation threshold)\n\n"
+                    f"{job.title} @ {job.company}\n"
+                    f"{detail}\n"
+                    f"Apply run stopped automatically.",
+                    buttons=[[{"text": "\U0001f517 View Job", "url": job_url}]] if job_url else None,
+                )
             else:
                 logger.warning("Failed: %s @ %s - %s", job.title, job.company, result.message)
                 buttons = [
