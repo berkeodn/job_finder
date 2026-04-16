@@ -9,7 +9,12 @@ from config import settings
 from src.db.database import get_session, init_db
 from src.db.models import Job
 from src.matcher.gemini import score_job
-from src.matcher.profile import is_blacklisted, load_profile, passes_prefilter
+from src.matcher.profile import (
+    is_blacklisted,
+    load_profile,
+    passes_location_postfilter,
+    passes_prefilter,
+)
 from src.notifier.telegram import send_alert, send_job_notification, send_rejected_notification
 from src.scraper.linkedin import fetch_descriptions, scrape_all_pages, scrape_page
 
@@ -50,6 +55,18 @@ async def run() -> None:
             logger.info("Searching: %s (%s)", search.keywords, search.location)
 
             raw_jobs = await scrape_all_pages(search)
+            _before_pf = len(raw_jobs)
+            raw_jobs = [
+                r
+                for r in raw_jobs
+                if passes_location_postfilter(r.location, profile.location_postfilter)
+            ]
+            if profile.location_postfilter and _before_pf != len(raw_jobs):
+                logger.info(
+                    "Location post-filter: %d -> %d jobs",
+                    _before_pf,
+                    len(raw_jobs),
+                )
             stats["scraped"] += len(raw_jobs)
 
             # Dedup & store
@@ -106,13 +123,19 @@ async def run() -> None:
             session.commit()
 
             # Full pre-filter (title + description)
+            _cand_before = len(candidates)
             for job in title_passed:
                 if passes_prefilter(job.title, job.description, profile):
                     job.passed_prefilter = True
                     candidates.append(job)
             session.commit()
 
-            logger.info("Query '%s': %d passed full filter", search.keywords, len(candidates))
+            logger.info(
+                "Query '%s': +%d passed full filter (candidates total: %d)",
+                search.keywords,
+                len(candidates) - _cand_before,
+                len(candidates),
+            )
 
         stats["prefiltered"] = len(candidates)
         stats["retried"] = len(retry_jobs)

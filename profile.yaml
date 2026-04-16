@@ -86,29 +86,46 @@ preferred_roles:
 # Each entry becomes a separate LinkedIn search.
 # time_posted: r86400=24h, r604800=7d
 # work_type: "remote", "onsite", "hybrid", or "" (all types)
-
 searches:
   - keywords: "data engineer"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "veri mühendisi"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "data scientist"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "data analyst"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "business intelligence"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "analytics engineer"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
   - keywords: "ai engineer"
-    location: "Turkey"
+    location: "Türkiye"
     time_posted: "r604800"
+
+# After scraping: drop jobs whose card location line matches none of these substrings.
+# Case-insensitive. Remote-only rows with no city/country may be excluded — add tokens if needed.
+location_postfilter:
+  - "türkiye"
+  - "turkey"
+  - "istanbul"
+  - "ankara"
+  - "izmir"
+  - "bursa"
+  - "antalya"
+  - "gaziantep"
+  - "konya"
+  - "adana"
+  - "mersin"
+  - "kocaeli"
+  - "eskisehir"
+  - "trabzon"
 
 
 # ── Pre-filter Rules ─────────────────────────────────────────

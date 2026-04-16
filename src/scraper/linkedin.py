@@ -129,18 +129,18 @@ async def scrape_all_pages(query: SearchQuery) -> list[RawJob]:
     total_results: int | None = None
 
     async with httpx.AsyncClient(timeout=30) as client:
-        next_start = 0
         for page in range(MAX_PAGES_SAFETY):
-            if total_results is not None and next_start >= total_results:
+            start = page * RESULTS_PER_PAGE
+            if total_results is not None and start >= total_results:
                 logger.info("Reached total results (%d), stopping", total_results)
                 break
 
             if page == 0:
                 url = _build_search_url(query, start=0)
             else:
-                url = _build_see_more_url(query, start=next_start)
+                url = _build_see_more_url(query, start=start)
 
-            logger.info("Fetching page %d (start=%d): %s", page + 1, next_start, url)
+            logger.info("Fetching page %d (start=%d): %s", page + 1, start, url)
 
             delay = random.uniform(settings.scrape_delay_min, settings.scrape_delay_max)
             await asyncio.sleep(delay)
@@ -173,11 +173,9 @@ async def scrape_all_pages(query: SearchQuery) -> list[RawJob]:
                     all_jobs.append(job)
                     new_count += 1
 
-            next_start = len(all_jobs)
-
             logger.info(
-                "Page %d: %d cards, %d new (total so far: %d, next start: %d)",
-                page + 1, len(jobs), new_count, len(all_jobs), next_start,
+                "Page %d: %d cards, %d new (total unique: %d)",
+                page + 1, len(jobs), new_count, len(all_jobs),
             )
 
             if new_count == 0:
