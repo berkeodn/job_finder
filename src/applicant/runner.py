@@ -259,12 +259,17 @@ async def run_applicant() -> None:
                     job.company,
                     detail,
                 )
+                loop_buttons = [
+                    [{"text": "\U0001f504 Retry", "callback_data": f"apply:{job.job_id}"}],
+                ]
+                if job_url:
+                    loop_buttons.append([{"text": "\U0001f517 View Job", "url": job_url}])
                 send_alert(
                     f"\U0001f501 Loop detected (repetition/stagnation threshold)\n\n"
                     f"{job.title} @ {job.company}\n"
                     f"{detail}\n"
                     f"Apply run stopped automatically.",
-                    buttons=[[{"text": "\U0001f517 View Job", "url": job_url}]] if job_url else None,
+                    buttons=loop_buttons,
                 )
             else:
                 logger.warning("Failed: %s @ %s - %s", job.title, job.company, result.message)
