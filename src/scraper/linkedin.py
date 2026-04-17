@@ -27,7 +27,8 @@ HEADERS = {
 }
 
 RESULTS_PER_PAGE = 25
-MAX_PAGES_SAFETY = 40  # 40 * 25 = 1000 max (LinkedIn's hard ceiling)
+# Upper bound on paginated requests (guest search pages are often small, ~10–25 cards).
+MAX_PAGES_SAFETY = 120
 
 
 @dataclass
@@ -127,20 +128,25 @@ async def scrape_all_pages(query: SearchQuery) -> list[RawJob]:
     all_jobs: list[RawJob] = []
     seen_ids: set[str] = set()
     total_results: int | None = None
+    # First HTML response often embeds more than RESULTS_PER_PAGE listings; the next
+    # request must use start=<number already shown> or seeMore repeats listings that
+    # we already parsed and pagination would stop early.
+    next_start = 0
 
     async with httpx.AsyncClient(timeout=30) as client:
         for page in range(MAX_PAGES_SAFETY):
-            start = page * RESULTS_PER_PAGE
-            if total_results is not None and start >= total_results:
+            if total_results is not None and next_start >= total_results:
                 logger.info("Reached total results (%d), stopping", total_results)
                 break
 
             if page == 0:
                 url = _build_search_url(query, start=0)
+                request_start = 0
             else:
-                url = _build_see_more_url(query, start=start)
+                url = _build_see_more_url(query, start=next_start)
+                request_start = next_start
 
-            logger.info("Fetching page %d (start=%d): %s", page + 1, start, url)
+            logger.info("Fetching page %d (start=%d): %s", page + 1, request_start, url)
 
             delay = random.uniform(settings.scrape_delay_min, settings.scrape_delay_max)
             await asyncio.sleep(delay)
@@ -178,9 +184,9 @@ async def scrape_all_pages(query: SearchQuery) -> list[RawJob]:
                 page + 1, len(jobs), new_count, len(all_jobs),
             )
 
-            if new_count == 0:
-                logger.info("No new jobs on page %d, stopping", page + 1)
-                break
+            # Advance by how many cards LinkedIn returned on this page (their offset),
+            # not a fixed 25 — the initial HTML page can contain 60+ cards.
+            next_start += len(jobs)
 
     logger.info("Scraped %d total unique jobs for query '%s'", len(all_jobs), query.keywords)
     return all_jobs
