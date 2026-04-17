@@ -267,7 +267,6 @@ async def run() -> None:
         above_threshold.sort(key=lambda j: j.match_score or 0, reverse=True)
         below_threshold.sort(key=lambda j: j.match_score or 0, reverse=True)
 
-        _log_summary(stats)
         _send_summary(stats, len(above_threshold), len(below_threshold))
 
         if above_threshold:
@@ -308,6 +307,8 @@ async def run() -> None:
                     job_id=job.job_id,
                 )
 
+        _log_summary(stats)
+
         session.commit()
 
     finally:
@@ -317,7 +318,7 @@ async def run() -> None:
 def _log_summary(stats: dict) -> None:
     logger.info("=== Pipeline Summary ===")
     logger.info("  Scraped:      %d", stats["scraped"])
-    logger.info("  New (deduped): %d", stats["new"])
+    logger.info("  New:           %d", stats["new"])
     logger.info("  Pre-filtered:  %d", stats["prefiltered"])
     logger.info("  Retried:       %d", stats.get("retried", 0))
     logger.info("  AI scored:     %d", stats["scored"])
@@ -326,21 +327,15 @@ def _log_summary(stats: dict) -> None:
 
 
 def _send_summary(stats: dict, matched: int = 0, eliminated: int = 0) -> None:
-    icon = "✅" if stats["notified"] > 0 else "📭"
-    retried = stats.get("retried", 0)
+    icon = "✅" if matched > 0 else "📭"
     lines = [
         f"{icon} Pipeline Summary\n",
         f"Scraped:       {stats['scraped']}",
-        f"New (deduped): {stats['new']}",
+        f"New:           {stats['new']}",
         f"Pre-filtered:  {stats['prefiltered']}",
-    ]
-    if retried:
-        lines.append(f"Retried:       {retried}")
-    lines += [
         f"AI scored:     {stats['scored']}",
         f"Matched:       {matched}",
         f"Eliminated:    {eliminated}",
-        f"Notified:      {stats['notified']}",
     ]
     send_alert("\n".join(lines))
 
