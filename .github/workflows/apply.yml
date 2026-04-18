@@ -110,7 +110,14 @@ jobs:
           venv\Scripts\Activate.ps1
           python -c "from src.db.database import init_db, get_session; from src.db.models import Job; init_db(); s = get_session(); url='${{ github.event.inputs.test_url }}'; j = s.query(Job).filter(Job.url == url).first(); j = j or Job(job_id='test_'+str(hash(url))[-8:], title='Test Job', company='Test', url=url, passed_prefilter=True, match_score=99); j.apply_status='approved'; j.applied_at=None; s.merge(j); s.commit(); print(f'Ready to apply: {j.title} @ {j.company} -> {url}'); s.close()"
 
+      - name: Count pending apply jobs (URL dedup)
+        id: pending_apply
+        run: |
+          venv\Scripts\Activate.ps1
+          python -c "import os; from src.applicant.runner import pending_apply_job_count; n = pending_apply_job_count(); open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8').write('count='+str(n)+chr(10)); print('pending_after_dedup', n)"
+
       - name: Run auto-apply
+        if: ${{ steps.pending_apply.outputs.count != '0' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

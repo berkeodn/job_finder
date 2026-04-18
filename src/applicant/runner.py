@@ -40,6 +40,113 @@ def _unwrap_linkedin_redirect(url: str) -> str:
     return url
 
 
+def _normalize_url_for_apply_dedup(url: str) -> str:
+    """Stable key so duplicate scrape rows for the same posting match before we run the agent."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    u = _unwrap_linkedin_redirect(u)
+    parsed = urlparse(u)
+    netloc = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/") or "/"
+    scheme = (parsed.scheme or "https").lower()
+    return f"{scheme}://{netloc}{path}"
+
+
+def _applied_job_ids_by_norm_url(session) -> dict[str, set[int]]:
+    rows = (
+        session.query(Job.id, Job.url)
+        .filter(func.trim(Job.apply_status) == "applied")
+        .all()
+    )
+    out: dict[str, set[int]] = {}
+    for jid, u in rows:
+        nu = _normalize_url_for_apply_dedup(u or "")
+        if not nu:
+            continue
+        out.setdefault(nu, set()).add(jid)
+    return out
+
+
+def _best_applied_at_by_norm_url(session) -> dict[str, datetime | None]:
+    rows = (
+        session.query(Job.url, Job.applied_at)
+        .filter(func.trim(Job.apply_status) == "applied")
+        .all()
+    )
+    best: dict[str, datetime | None] = {}
+    for u, at in rows:
+        nu = _normalize_url_for_apply_dedup(u or "")
+        if not nu:
+            continue
+        cur = best.get(nu)
+        if at is not None and (cur is None or at > cur):
+            best[nu] = at
+        elif nu not in best:
+            best[nu] = at
+    return best
+
+
+def prepare_pending_apply_jobs(session, pending_jobs: list[Job]) -> list[Job]:
+    """
+    Drop work that would waste an agent run:
+    - another row with the same normalized URL is already applied;
+    - multiple approved rows share the same URL (only the first by id is kept).
+    """
+    applied_ids = _applied_job_ids_by_norm_url(session)
+    applied_at_by_nu = _best_applied_at_by_norm_url(session)
+    still: list[Job] = []
+    seen_approved_url: set[str] = set()
+
+    for job in sorted(pending_jobs, key=lambda j: j.id):
+        nu = _normalize_url_for_apply_dedup(job.url or "")
+        if not nu:
+            still.append(job)
+            continue
+
+        ids_applied = applied_ids.get(nu)
+        if ids_applied is not None and job.id not in ids_applied:
+            job.apply_status = "applied"
+            job.applied_at = applied_at_by_nu.get(nu) or datetime.now(timezone.utc)
+            session.commit()
+            logger.info(
+                "Skipping apply (URL already applied on another row): %s @ %s",
+                job.title,
+                job.company,
+            )
+            continue
+
+        if nu in seen_approved_url:
+            job.apply_status = "duplicate"
+            session.commit()
+            logger.info(
+                "Skipping apply (duplicate approved URL in queue): %s @ %s",
+                job.title,
+                job.company,
+            )
+            continue
+
+        seen_approved_url.add(nu)
+        still.append(job)
+
+    return still
+
+
+def pending_apply_job_count() -> int:
+    """How many jobs would run after URL dedup (for CI / scripts). Commits skip/duplicate updates."""
+    init_db()
+    session = get_session()
+    try:
+        pending = (
+            session.query(Job)
+            .filter(func.trim(Job.apply_status) == "approved")
+            .all()
+        )
+        return len(prepare_pending_apply_jobs(session, pending))
+    finally:
+        session.close()
+
+
 def _looks_like_already_applied(message: str) -> bool:
     """LinkedIn / ATS says the user already applied; treat as done, not a retryable failure."""
     m = (message or "").lower()
@@ -170,6 +277,8 @@ async def run_applicant() -> None:
         .filter(func.trim(Job.apply_status) == "approved")
         .all()
     )
+
+    pending_jobs = prepare_pending_apply_jobs(session, pending_jobs)
 
     if not pending_jobs:
         total = session.query(Job).count()
