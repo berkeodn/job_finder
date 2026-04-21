@@ -125,6 +125,7 @@ FORCE_CLICK_FIND_JS = """(args) => {
                                 && e.offsetParent !== null
                                 && e.children.length === 0
                             );
+
                             if (!el) {
                                 const shorter = t.substring(0, 30);
                                 el = scope.find(e =>
@@ -546,6 +547,24 @@ class AgentAdapter(BaseAdapter):
                     f"then automatic ArrowDown+Enter on the focused combobox if clicks miss the list.\n\n"
                 )
 
+            generic_city_block = ""
+            if not is_linkedin:
+                generic_city_block = (
+                    f"\nCITY / ŞEHİR / LOCATION — GENERIC CAREER SITES (NOT LinkedIn Easy Apply):\n"
+                    f"Some forms use a normal text box, a broken autocomplete, or an API that shows NO suggestion list "
+                    f"when you type (e.g. you type the profile city and nothing appears underneath).\n"
+                    f"RULES:\n"
+                    f"- After input(..., text=<city>, clear=True) and wait(seconds=2), look at the screenshot.\n"
+                    f"- If there is NO visible dropdown, listbox, or suggestion list under the field, you are DONE "
+                    f"with that field — the typed text is the answer. Go to the next field immediately.\n"
+                    f"- Do NOT call force_click_element(text=<city>) when no row exists to click. "
+                    f"Do NOT loop on re-typing the city or evaluate/querySelector hunting for options.\n"
+                    f"- ONLY if a real list appears, pick once (click(index=...) on the row, or force_click_element "
+                    f"with the exact visible line). If pick fails but the input still shows the city, MOVE ON anyway.\n"
+                    f"- If the form may require a parent first (e.g. Country before City), fill Country, then retry "
+                    f"city once; if STILL no list, accept the typed city and continue.\n\n"
+                )
+
             task_prompt = (
                 f"{login_instructions}"
                 f"{closed_job_instructions}"
@@ -563,6 +582,7 @@ class AgentAdapter(BaseAdapter):
                 f"- Address / Cadde/Sokak Adı: {profile.address_line}\n"
                 f"- City / Şehir: {profile.city}\n"
                 f"{linkedin_location_block}"
+                f"{generic_city_block}"
                 f"- District / Mahalle/Köy / İlçe: {profile.district}\n"
                 f"- Postal Code / Posta Kodu: {profile.postal_code}\n"
                 f"- Education: {profile.education}\n"
@@ -646,7 +666,10 @@ class AgentAdapter(BaseAdapter):
                 f"  1. Type into the field using 'input' with clear=True.\n"
                 f"  2. Look at the screenshot IMMEDIATELY after typing.\n"
                 f"  3. DROPDOWN: a suggestion list / popup appeared → click the matching option.\n"
-                f"  4. PLAIN TEXT: NO suggestions appeared → the value is already entered. Move on.\n"
+                f"  4. NO LIST / DEAD AUTocomplete: After typing + wait(2), if NO suggestion list or popup "
+                f"appears, the field behaves as plain text — the characters in the box count. "
+                f"MOVE ON immediately. Do NOT force_click_element on text that has no clickable row "
+                f"(common on City/Şehir when the backend returns no suggestions).\n"
                 f"     If unsure, call fill_text_field(label=..., value=...) to confirm the value.\n"
                 f"  5. NATIVE <select>: the field shows a fixed list when clicked → "
                 f"use native_select(label=..., value=...).\n"
@@ -714,7 +737,8 @@ class AgentAdapter(BaseAdapter):
                 f"      → HIDDEN FILTER TEXT: On some ATS fields (e.g. Nationalities, multi-select), typed "
                 f"characters do NOT show in the box, but the dropdown list STILL changes (e.g. type 'turk' → "
                 f"'Turkish' appears in the list). That is SUCCESS — do not retry typing; pick the option from the list.\n"
-                f"      → NO list change at all and no suggestions? If it is clearly plain text elsewhere, MOVE ON.\n"
+                f"      → NO list change at all and no suggestions after wait(2)? The typed value is enough — MOVE ON. "
+                f"Especially for City/Şehir: many sites show no list; never loop on picking a non-existent row.\n"
                 f"  APPROACH B — You do NOT know the options (e.g. 'English level', 'Notice period', "
                 f"or any dropdown where you cannot guess the exact option text):\n"
                 f"    Step 1: Click the input field to focus/open the dropdown.\n"
@@ -743,7 +767,9 @@ class AgentAdapter(BaseAdapter):
                 f"suggestions anywhere, treat as plain text only then MOVE ON.\n"
                 f"  C) 'input' typed, suggestions appeared, force_click_element failed → retry ONCE → "
                 f"still fails → SKIP.\n"
-                f"  D) Typed text returns '0 results' → clear field, click to open dropdown, "
+                f"  D) City/Şehir/location: typed profile city, waited, NO suggestions ever appeared → "
+                f"that is NOT a failure; do not keep trying force_click. Continue to the next field.\n"
+                f"  E) Typed text returns '0 results' → clear field, click to open dropdown, "
                 f"READ the available options from screenshot, pick the best one → "
                 f"force_click_element. If still fails → SKIP.\n"
                 f"CRITICAL: NEVER type the same text more than twice into a dropdown. "
@@ -908,6 +934,8 @@ class AgentAdapter(BaseAdapter):
                 "Force-click an element using a real browser click (CDP) when normal click "
                 "doesn't work. Useful for Workday and React frameworks that ignore JS events. "
                 "Provide the visible text of the element to click. "
+                "Only use when that text is a REAL visible row/label — not when a dropdown failed to "
+                "render any options (e.g. city field with no suggestion list: move on instead). "
                 "LinkedIn Easy Apply typeahead: after input+wait, pass the FULL suggestion line "
                 "(e.g. city + country as shown) — required for Location (city) comboboxes. "
                 "Omit selector= for suggestion rows (list may render outside the form). "
