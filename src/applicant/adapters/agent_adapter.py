@@ -238,6 +238,38 @@ FORCE_CLICK_FIND_JS = """(args) => {
 
                     let target = el;
 
+                    // Consent / legal lines often wrap a native checkbox with visible text that includes
+                    // <a href> links — clicking center of the label opens a new tab. Prefer the
+                    // input, or the LEFT side of the label (not the link).
+                    const isHiddenToggle = (inp) => {
+                        if (!inp || (inp.type !== 'checkbox' && inp.type !== 'radio')) return true;
+                        const r = inp.getBoundingClientRect();
+                        const st = getComputedStyle(inp);
+                        return r.width < 5 || r.height < 5
+                            || st.opacity === '0' || st.visibility === 'hidden';
+                    };
+                    if (el.tagName === 'A' && el.getAttribute('href')) {
+                        const lab = el.closest('label');
+                        if (lab) {
+                            const inp = lab.querySelector('input[type="checkbox"], input[type="radio"]');
+                            if (inp && !isHiddenToggle(inp)) {
+                                target = inp;
+                                el = inp;
+                            } else if (inp) {
+                                target = lab;
+                                el = lab;
+                            }
+                        }
+                    } else if (el.tagName === 'LABEL') {
+                        const inp = el.querySelector('input[type="checkbox"], input[type="radio"]');
+                        if (inp && !isHiddenToggle(inp)) {
+                            target = inp;
+                            el = inp;
+                        } else if (inp) {
+                            target = el;
+                        }
+                    }
+
                     if (el.tagName === 'INPUT'
                         && (el.type === 'radio' || el.type === 'checkbox')) {
                         const r = el.getBoundingClientRect();
@@ -246,7 +278,13 @@ FORCE_CLICK_FIND_JS = """(args) => {
                             || style.opacity === '0' || style.visibility === 'hidden';
                         if (hidden && el.id) {
                             const lbl = document.querySelector('label[for="' + el.id + '"]');
-                            if (lbl) target = lbl;
+                            if (lbl) {
+                                // Click left part of label so we do not hit an <a> in the same row.
+                                target = lbl;
+                            } else {
+                                const lab = el.closest('label');
+                                if (lab) target = lab;
+                            }
                         }
                     }
 
@@ -263,9 +301,30 @@ FORCE_CLICK_FIND_JS = """(args) => {
 
                     target.scrollIntoView({block: 'center'});
                     const rect = target.getBoundingClientRect();
+                    let cx = Math.round(rect.x + rect.width / 2);
+                    let cy = Math.round(rect.y + rect.height / 2);
+                    // Label or custom row with a legal <a> link: center often hits the link (new tab).
+                    const nudgeIfLegalLink = (node) => {
+                        if (!node) return;
+                        const hasLink = node.querySelector && node.querySelector('a[href]');
+                        if (!hasLink) return;
+                        const sub = node.querySelector('input[type="checkbox"], input[type="radio"]');
+                        const sr = sub ? sub.getBoundingClientRect() : { width: 0, height: 0 };
+                        if (sub && sr.width >= 4 && sr.height >= 4) {
+                            return;
+                        }
+                        const leftNudge = Math.max(10, Math.min(36, rect.width * 0.14));
+                        cx = Math.round(rect.x + leftNudge);
+                    };
+                    if (target.tagName === 'LABEL') {
+                        nudgeIfLegalLink(target);
+                    } else if (target.getAttribute('role') === 'checkbox' || target.getAttribute('role') === 'radio') {
+                        nudgeIfLegalLink(target);
+                    }
+
                     return JSON.stringify({
-                        x: Math.round(rect.x + rect.width / 2),
-                        y: Math.round(rect.y + rect.height / 2),
+                        x: cx,
+                        y: cy,
                         tag: target.tagName,
                         role: target.getAttribute('role') || 'none',
                         text: t.slice(0, 50),
@@ -706,10 +765,15 @@ class AgentAdapter(BaseAdapter):
                 f"pick with force_click_element(text='...') OR click(index=...) on the row from the current list. "
                 f"Unindexed generic click is unreliable on React; indexed click is OK. Do NOT use fill_text_field on comboboxes.\n"
                 f"- native_select(label=..., value=...): For native HTML <select> elements.\n"
-                f"- set_form_value(selector, value): For hidden inputs, radios, checkboxes, sliders.\n"
+                f"- set_form_value(selector, value): For hidden inputs, radios, checkboxes, sliders. "
+                f"For the Nth consent checkbox, prefer a specific selector (e.g. from find_elements) rather than "
+                f"input[type=checkbox] alone, which can toggle the wrong box.\n"
                 f"- force_click_element(text=...): For radio buttons, checkboxes, AND dropdown options. "
                 f"Uses CDP trusted events. ONLY pass text= with the exact visible text on screen (any language). "
-                f"Do NOT pass selector=. Works for: radio labels, checkbox labels, "
+                f"Do NOT pass selector= (and never selector='a') — on lines like 'I agree to the clarifications' the "
+                f"underlined word is a link that opens a NEW TAB; this tool is adjusted to click the actual checkbox. "
+                f"Do NOT use the generic click(index=...) on that line if the list entry is an <a> link. "
+                f"Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
                 f"- upload_file: For file upload fields.\n\n"
                 f"LINKEDIN EASY APPLY — LOCATION / SCHOOL / COMPANY TYPEAHEAD (CRITICAL):\n"
