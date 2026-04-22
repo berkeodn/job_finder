@@ -88,10 +88,8 @@ FORCE_CLICK_FIND_JS = """(args) => {
                                 const id = (inp.getAttribute("id") || "");
                                 if (id) {
                                     try {
-                                        if (!/[\\s"<>]/.test(id) && id.indexOf("#") < 0) {
-                                            const L = document.querySelector("label[for=\"" + id + "\"]");
-                                            if (L) return (L.textContent || "").toLowerCase();
-                                        }
+                                        const L = document.querySelector(`label[for="${id}"]`);
+                                        if (L) return (L.textContent || "").toLowerCase();
                                     } catch (e) { /* ignore */ }
                                 }
                                 const L2 = inp.closest("label");
