@@ -65,6 +65,9 @@ skills:
   - langchain
   - openai api
   - postman
+  - terraform
+  - cursor
+  - claude code
 
 salary_expectation: "190000 TL net/month"
 english_proficiency: "Professional working proficiency (C1) (Advanced)"
