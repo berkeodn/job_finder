@@ -74,15 +74,57 @@ FORCE_CLICK_FIND_JS = """(args) => {
                     };
 
                     if (t) {
+                        // Multiple consent checkboxes: <input> has no text, so selection by selector+text
+                        // was resolving to the FIRST checkbox for every call (same x,y). Match by row text.
+                        (function() {
+                            const tNorm = t.replace(/\\s*\\*+\\s*$/g, "").trim().toLowerCase();
+                            if (!/agree|onay|clarif|term|şart|koşul/.test(tNorm)) return;
+                            const cbs = [...document.querySelectorAll("input[type=\"checkbox\"]")];
+                            if (cbs.length < 2) return;
+                            const getRowText = (inp) => {
+                                if (inp.labels && inp.labels.length) {
+                                    return (inp.labels[0].textContent || "").toLowerCase();
+                                }
+                                const id = (inp.getAttribute("id") || "");
+                                if (id) {
+                                    try {
+                                        if (!/[\\s"<>]/.test(id) && id.indexOf("#") < 0) {
+                                            const L = document.querySelector("label[for=\"" + id + "\"]");
+                                            if (L) return (L.textContent || "").toLowerCase();
+                                        }
+                                    } catch (e) { /* ignore */ }
+                                }
+                                const L2 = inp.closest("label");
+                                if (L2) return (L2.textContent || "").toLowerCase();
+                                const row = inp.closest("div, li, tr, p, [role=row], fieldset, label");
+                                return (row && row.textContent ? row.textContent : "").toLowerCase().slice(0, 800);
+                            };
+                            const wantClar = tNorm.indexOf("clarif") >= 0;
+                            const wantTerms = tNorm.indexOf("clarif") < 0
+                                && (tNorm.indexOf("term") >= 0 || tNorm.indexOf("şart") >= 0)
+                                && (tNorm.indexOf("condition") >= 0 || tNorm.indexOf("şart") >= 0
+                                    || tNorm.indexOf("koşul") >= 0);
+                            for (const cb of cbs) {
+                                const row = getRowText(cb);
+                                const isClar = row.indexOf("clarif") >= 0;
+                                const isTerms = row.indexOf("term") >= 0
+                                    && (row.indexOf("condition") >= 0
+                                        || row.indexOf("şart") >= 0
+                                        || row.indexOf("koşul") >= 0);
+                                if (wantClar && isClar) { el = cb; return; }
+                                if (wantTerms && isTerms && !isClar) { el = cb; return; }
+                            }
+                        })();
+
                         const labels = [...document.querySelectorAll('label')];
                         const exactLabel = labels.find(l =>
                             l.textContent.trim() === t && l.offsetParent !== null
                         );
-                        const partialLabel = !exactLabel && labels.find(l =>
+                        const partialLabel = !exactLabel && !el && labels.find(l =>
                             l.textContent.trim().includes(t) && l.offsetParent !== null
                         );
                         const matchLabel = exactLabel || partialLabel;
-                        if (matchLabel) {
+                        if (matchLabel && !el) {
                             const forId = matchLabel.getAttribute('for');
                             if (forId) {
                                 const inp = document.getElementById(forId);
@@ -800,8 +842,10 @@ class AgentAdapter(BaseAdapter):
                 f"input[type=checkbox] alone, which can toggle the wrong box.\n"
                 f"- force_click_element(text=...): For radio buttons, checkboxes, AND dropdown options. "
                 f"Uses CDP trusted events. ONLY pass text= with the exact visible text on screen (any language). "
-                f"Do NOT pass selector= (and never selector='a') — on lines like 'I agree to the clarifications' the "
-                f"underlined word is a link that opens a NEW TAB; this tool is adjusted to click the actual checkbox. "
+                f"Do NOT pass selector= (and never selector='a') — on those lines the link opens a new tab. "
+                f"If there are two consent checkboxes, still include the full line text in text= (e.g. 'clarifications' "
+                f"vs 'terms and conditions'); the tool uses that to pick the correct input even when using "
+                f"selector: input[type=checkbox]. "
                 f"Do NOT use the generic click(index=...) on that line if the list entry is an <a> link. "
                 f"Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
