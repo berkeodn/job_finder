@@ -74,21 +74,22 @@ FORCE_CLICK_FIND_JS = """(args) => {
                     };
 
                     if (t) {
-                        // Multiple consent checkboxes: <input> has no text, so selection by selector+text
-                        // was resolving to the FIRST checkbox for every call (same x,y). Match by row text.
+                        // Consent checkboxes: <input> has no text; label often contains <a href> (opens new tab
+                        // if the click is not on the real input). Match the right row, then we DOM-click
+                        // the input later (not the label) when text sounds like consent.
                         (function() {
                             const tNorm = t.replace(/\\s*\\*+\\s*$/g, "").trim().toLowerCase();
-                            if (!/agree|onay|clarif|term|şart|koşul/.test(tNorm)) return;
+                            if (!/agree|onay|clarif|term|şart|koşul|kabul|accept|consent/.test(tNorm)) return;
                             const cbs = [...document.querySelectorAll("input[type=\"checkbox\"]")];
-                            if (cbs.length < 2) return;
+                            if (cbs.length < 1) return;
                             const getRowText = (inp) => {
                                 if (inp.labels && inp.labels.length) {
                                     return (inp.labels[0].textContent || "").toLowerCase();
                                 }
-                                const id = (inp.getAttribute("id") || "");
-                                if (id) {
+                                const iid = (inp.getAttribute("id") || "");
+                                if (iid) {
                                     try {
-                                        const L = document.querySelector(`label[for="${id}"]`);
+                                        const L = document.querySelector("label[for=" + JSON.stringify(iid) + "]");
                                         if (L) return (L.textContent || "").toLowerCase();
                                     } catch (e) { /* ignore */ }
                                 }
@@ -99,18 +100,27 @@ FORCE_CLICK_FIND_JS = """(args) => {
                             };
                             const wantClar = tNorm.indexOf("clarif") >= 0;
                             const wantTerms = tNorm.indexOf("clarif") < 0
-                                && (tNorm.indexOf("term") >= 0 || tNorm.indexOf("şart") >= 0)
-                                && (tNorm.indexOf("condition") >= 0 || tNorm.indexOf("şart") >= 0
-                                    || tNorm.indexOf("koşul") >= 0);
+                                && (tNorm.indexOf("term") >= 0 || tNorm.indexOf("şart") >= 0
+                                    || tNorm.indexOf("condition") >= 0);
+                            const isRowClar = (row) => (row || "").indexOf("clarif") >= 0;
+                            const isRowTerms = (row) => {
+                                const s = (row || "").toLowerCase();
+                                if (s.indexOf("clarif") >= 0) return false;
+                                return s.indexOf("term") >= 0 || s.indexOf("şart") >= 0
+                                    || s.indexOf("koşul") >= 0 || s.indexOf("condition") >= 0;
+                            };
+                            if (cbs.length === 1) {
+                                const cb0 = cbs[0];
+                                const row0 = getRowText(cb0);
+                                if (wantClar && isRowClar(row0)) { el = cb0; return; }
+                                if (wantTerms && isRowTerms(row0)) { el = cb0; return; }
+                            }
                             for (const cb of cbs) {
                                 const row = getRowText(cb);
-                                const isClar = row.indexOf("clarif") >= 0;
-                                const isTerms = row.indexOf("term") >= 0
-                                    && (row.indexOf("condition") >= 0
-                                        || row.indexOf("şart") >= 0
-                                        || row.indexOf("koşul") >= 0);
+                                const isClar = isRowClar(row);
+                                const isTerms = isRowTerms(row);
                                 if (wantClar && isClar) { el = cb; return; }
-                                if (wantTerms && isTerms && !isClar) { el = cb; return; }
+                                if (wantTerms && isTerms) { el = cb; return; }
                             }
                         })();
 
@@ -127,11 +137,15 @@ FORCE_CLICK_FIND_JS = """(args) => {
                             if (forId) {
                                 const inp = document.getElementById(forId);
                                 if (inp && (inp.type === 'radio' || inp.type === 'checkbox')) {
-                                    const r = inp.getBoundingClientRect();
-                                    const style = getComputedStyle(inp);
-                                    const hidden = r.width < 5 || r.height < 5
-                                        || style.opacity === '0' || style.visibility === 'hidden';
-                                    el = hidden ? matchLabel : inp;
+                                    // Label with legal <a> links: never use the label as the click target.
+                                    if (matchLabel.querySelector("a[href]")) { el = inp; }
+                                    else {
+                                        const r = inp.getBoundingClientRect();
+                                        const style = getComputedStyle(inp);
+                                        const hidden = r.width < 5 || r.height < 5
+                                            || style.opacity === "0" || style.visibility === "hidden";
+                                        el = hidden ? matchLabel : inp;
+                                    }
                                 } else {
                                     el = matchLabel;
                                 }
@@ -317,7 +331,7 @@ FORCE_CLICK_FIND_JS = """(args) => {
                         const hidden = r.width < 5 || r.height < 5
                             || style.opacity === '0' || style.visibility === 'hidden';
                         if (hidden && el.id) {
-                            const lbl = document.querySelector('label[for="' + el.id + '"]');
+                            const lbl = document.querySelector("label[for=" + JSON.stringify(el.id) + "]");
                             if (lbl) {
                                 // Click left part of label so we do not hit an <a> in the same row.
                                 target = lbl;
@@ -325,6 +339,37 @@ FORCE_CLICK_FIND_JS = """(args) => {
                                 const lab = el.closest('label');
                                 if (lab) target = lab;
                             }
+                        }
+                    }
+
+                    // Native consent: click the real <input> in the page (not label/CDP) so a legal
+                    // <a> in the same row is not the hit target; return early so we skip CDP.
+                    {
+                        const tNorm0 = (t || "").replace(/\\s*\\*+\\s*$/g, "").trim().toLowerCase();
+                        if (!/agree|onay|clarif|term|şart|koşul|kabul|accept|consent/.test(tNorm0)) { /* not consent */ }
+                        else {
+                        let inp0 = null;
+                        if (target && target.tagName === "INPUT"
+                            && (target.type === "checkbox" || target.type === "radio")) { inp0 = target; }
+                        else if (el && el.tagName === "INPUT"
+                            && (el.type === "checkbox" || el.type === "radio")) { inp0 = el; }
+                        else if (target && target.querySelector) {
+                            inp0 = target.querySelector("input[type=checkbox], input[type=radio]");
+                        }
+                        if (inp0 && !inp0.disabled) {
+                            inp0.scrollIntoView({ block: "center" });
+                            if (inp0.type === "checkbox" && !inp0.checked) { inp0.click(); }
+                            else if (inp0.type === "radio") { inp0.click(); }
+                            return JSON.stringify({
+                                x: 0, y: 0,
+                                tag: "INPUT",
+                                role: inp0.getAttribute("role") || "consent",
+                                text: t.slice(0, 50),
+                                ariaChecked: String(inp0.checked),
+                                skipCdp: true,
+                                programmatic: true
+                            });
+                        }
                         }
                     }
 
@@ -844,7 +889,9 @@ class AgentAdapter(BaseAdapter):
                 f"If there are two consent checkboxes, still include the full line text in text= (e.g. 'clarifications' "
                 f"vs 'terms and conditions'); the tool uses that to pick the correct input even when using "
                 f"selector: input[type=checkbox]. "
-                f"Do NOT use the generic click(index=...) on that line if the list entry is an <a> link. "
+                f"Never use click(index=...) for consent/KVKK/clarification/IK lines — the index is often a "
+                f"legal <a> link (opens a new tab) or label, not the checkbox. "
+                f"After a successful force_click, do not re-click the same line with an index. "
                 f"Works for: radio labels, checkbox labels, "
                 f"dropdown option text (e.g. force_click_element(text='Türkiye') after typing in a dropdown).\n"
                 f"- upload_file: For file upload fields.\n\n"
@@ -996,9 +1043,26 @@ class AgentAdapter(BaseAdapter):
                     logger.warning("%s: %s", log_name, msg)
                     return ActionResult(extracted_content=str(msg))
 
-                x, y = info["x"], info["y"]
                 tag = info.get("tag", "?")
                 role = info.get("role", "?")
+                if info.get("programmatic") and info.get("skipCdp"):
+                    ac = info.get("ariaChecked", "")
+                    logger.info(
+                        "%s: native consent %s[role=%s] toggled in-page (skip CDP), ariaChecked=%s",
+                        log_name,
+                        tag,
+                        role,
+                        ac,
+                    )
+                    return ActionResult(
+                        extracted_content=(
+                            f"Consent input toggled in-page (not coordinate click): {tag} checked={ac}. "
+                            "Do not use click(index) on the consent line — the index can be a <a> link. "
+                            "If Apply stays disabled, scroll; fix Max/required; retry force_click_element."
+                        )
+                    )
+
+                x, y = info["x"], info["y"]
                 logger.info(
                     "%s: found %s[role=%s] at (%d,%d), sending CDP click",
                     log_name,
