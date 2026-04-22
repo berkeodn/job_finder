@@ -497,9 +497,14 @@ class AgentAdapter(BaseAdapter):
             )
 
             from ..salary.exchange_rates import fetch_live_try_rates
-            from ..salary.salary_convert import compute_equivalents, format_equivalents_hint
+            from ..salary.salary_convert import (
+                compute_equivalents,
+                format_equivalents_hint,
+                parse_tl_net_monthly,
+            )
 
             salary_rates_block = ""
+            eq = None
             try:
                 live = await asyncio.to_thread(fetch_live_try_rates)
                 if live:
@@ -523,6 +528,29 @@ class AgentAdapter(BaseAdapter):
                     salary_rates_block = f"\n{format_equivalents_hint(eq)}\n"
             except Exception as e:
                 logger.warning("Salary equivalent computation failed: %s", e)
+
+            if eq is not None:
+                _tl_net = eq.tl_monthly_net
+            else:
+                _tl_net = parse_tl_net_monthly(profile.salary_expectation)
+            if _tl_net is not None:
+                _rmin = int(round(_tl_net))
+                _rmax = int(round(_tl_net * 1.05))
+                salary_range_pair_block = (
+                    f"\nSALARY RANGE (MANDATORY WHEN PRESENT): Many ATS show TWO separate number fields for the same "
+                    f"expectation — e.g. Minimum + Maximum, Min value + Max value, or the second box placeholder "
+                    f"'Max value' (Quick Apply / hrPanda-style). You MUST fill BOTH boxes. "
+                    f"Use these digits: minimum={_rmin}, maximum={_rmax} (TRY per month unless the form says "
+                    f"yearly/gross — then convert from the lines below). "
+                    f"Fill the Max/second field even if Min already looks correct; an empty Max often shows red "
+                    f"'Required' and keeps Apply disabled. After filling, scroll back to the salary row and confirm "
+                    f"both fields show numbers. Do not mark 'salary done' after only one field.\n"
+                )
+            else:
+                salary_range_pair_block = (
+                    "\nSALARY RANGE: If you see two amount fields (Min/Max, or 'Max value'), fill BOTH from the "
+                    "single salary line in the profile; never leave the second/Max field empty.\n"
+                )
 
             closed_job_instructions = (
                 f"\nJOB CLOSED / ALREADY APPLIED DETECTION (CRITICAL):\n"
@@ -667,6 +695,7 @@ class AgentAdapter(BaseAdapter):
                 f"detect the type at runtime (see FIELD TYPE DETECTION below).\n"
                 f"\nSALARY: Base amount is {profile.salary_expectation} (your figure is NET/month in TRY).\n"
                 f"{salary_rates_block}"
+                f"{salary_range_pair_block}"
                 f"- TL / TRY + NET / net / take-home → use the NET line (first line above).\n"
                 f"- TL / TRY + GROSS / brüt / before tax / vergi öncesi → use the APPROX GROSS line (second line; "
                 f"approximate only).\n"
@@ -682,7 +711,8 @@ class AgentAdapter(BaseAdapter):
                 f"\nSkills: {', '.join(profile.skills)}\n"
                 f"\nAfter filling all fields, submit the form.\n"
                 f"If Submit/Apply stays disabled: scroll the full form (top to bottom) and look for any red 'Required' "
-                f"or empty inputs — often a missing some required fields, not only unchecked consent boxes.\n"
+                f"or empty inputs — very often a missing second salary field (Max value / maximum) or other required "
+                f"text, not only unchecked consent checkboxes.\n"
                 f"AFTER SUBMISSION — SUCCESS DETECTION (CRITICAL):\n"
                 f"If after clicking Submit you see a confirmation like 'Thank you', "
                 f"'Application submitted', 'Your application has been received', or similar:\n"
