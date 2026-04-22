@@ -622,6 +622,8 @@ class AgentAdapter(BaseAdapter):
                 f"{profile.summary}\n"
                 f"\nSkills: {', '.join(profile.skills)}\n"
                 f"\nAfter filling all fields, submit the form.\n"
+                f"If Submit/Apply stays disabled: scroll the full form (top to bottom) and look for any red 'Required' "
+                f"or empty inputs — often a missing some required fields, not only unchecked consent boxes.\n"
                 f"AFTER SUBMISSION — SUCCESS DETECTION (CRITICAL):\n"
                 f"If after clicking Submit you see a confirmation like 'Thank you', "
                 f"'Application submitted', 'Your application has been received', or similar:\n"
